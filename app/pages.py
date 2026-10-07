@@ -141,12 +141,12 @@ def import_page() -> str:
   <strong>Format:</strong>
   <pre style="overflow-x:auto;font-size:.85rem">{
   "restaurants": [
-    {"name": "Monsoon Indian Grill", "cuisine": "Indian",
-     "price_tier": 2, "notes": "", "favorite": false}
+    {"name": "Taco Town", "cuisine": "Mexican",
+     "price_tier": 1, "notes": "", "favorite": false}
   ],
   "visits": [
-    {"restaurant": "Monsoon Indian Grill",
-     "visited_at": "2026-07-25", "total": 74.06,
+    {"restaurant": "Taco Town",
+     "visited_at": "2026-06-05", "total": 32.50,
      "source": "import", "external_id": "gmail:abc123"}
   ]
 }</pre>
