@@ -20,7 +20,7 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       FOODFRIDAY_DATA_DIR: /data
-FOODFRIDAY_DATABASE_URL: <redacted>
+FOODFRIDAY_DATABASE_URL: sqlite:////data/foodfriday.db
     volumes:
       # SQLite database file persists on the host.
       - ./data:/data

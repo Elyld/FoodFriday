@@ -42,7 +42,7 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-password: <redacted>
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compute tags
         id: meta

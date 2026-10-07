@@ -53,7 +53,7 @@ services:
       - "${FOODFRIDAY_PORT:-4002}:8000"
     environment:
       FOODFRIDAY_DATA_DIR: /data
-FOODFRIDAY_DATABASE_URL: <redacted>
+FOODFRIDAY_DATABASE_URL: sqlite:////data/foodfriday.db
     volumes:
       - ./data:/data
 ```
