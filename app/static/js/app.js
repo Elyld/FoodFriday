@@ -177,15 +177,28 @@ async function saveSettings(e) {
 
 async function scanNow() {
   const box = document.getElementById('scan-result');
-  box.innerHTML = '<div class="spinner">🔍 Scanning your promos…</div>';
+  box.innerHTML = '<div class="spinner">🔍 Scan started in the background — this usually takes 1–3 minutes. Watching for the result…</div>';
   try {
     const data = await api('POST', '/api/deals/scan');
-    const bits = [escapeHtml(data.summary)];
-    if (data.restaurants_added) bits.push(data.restaurants_added + ' new restaurant(s)');
-    box.innerHTML = '<div class="preview-box"><strong>Scan done:</strong> ' + bits.join(' · ') + '.</div>';
-    toast('Scan complete 🎉');
+    // 202 {"status": "started"} — poll below for completion.
+    // Poll the settings endpoint until the background scan finishes.
+    const deadline = Date.now() + 6 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 10000));
+      const s = await api('GET', '/api/settings');
+      if (s.deal_scan_status !== 'running') {
+        const result = s.deal_scan_last_result || 'done';
+        box.innerHTML = '<div class="preview-box"><strong>Scan done:</strong> ' + escapeHtml(result) + '.</div>';
+        toast('Scan complete 🎉');
+        return;
+      }
+    }
+    box.innerHTML = '<div class="empty">Still scanning — refresh the Settings page to see the result.</div>';
   } catch (err) {
-    box.innerHTML = '<div class="empty">Scan failed: ' + escapeHtml(err.message) + '</div>';
+    const msg = /already running/.test(err.message)
+      ? 'A scan is already running — check back in a bit.'
+      : 'Scan failed: ' + err.message;
+    box.innerHTML = '<div class="empty">' + escapeHtml(msg) + '</div>';
   }
 }
 

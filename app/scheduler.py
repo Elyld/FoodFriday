@@ -8,13 +8,12 @@ creds are present. Settings changes re-arm the schedule.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.database import SessionLocal
-from app.deal_scan import K_LAST_RESULT, K_LAST_RUN, K_TIME, get_setting, run_scan, set_setting
+from app.deal_scan import K_TIME, get_setting, reset_stale_running, try_start_scan
 
 logger = logging.getLogger(__name__)
 
@@ -24,18 +23,14 @@ scheduler = BackgroundScheduler()
 
 
 def _job() -> None:
-    """The scheduled scan — runs in a worker thread with its own session."""
-    session = SessionLocal()
+    """The scheduled scan — starts a background scan, never overlapping a
+    manual one (try_start_scan returns False while one is running)."""
     try:
-        result = run_scan(session)
-        logger.info("deal scan finished: %s", result["summary"])
-    except Exception as exc:  # keep the scheduler alive; surface the error in settings
-        logger.warning("deal scan failed: %s", exc)
-        set_setting(session, K_LAST_RUN, datetime.now().isoformat(timespec="minutes"))
-        set_setting(session, K_LAST_RESULT, f"error: {exc}")
-        session.commit()
-    finally:
-        session.close()
+        started = try_start_scan(SessionLocal)
+    except RuntimeError:
+        return  # creds removed since scheduling; nothing to do
+    if not started:
+        logger.info("scheduled deal scan skipped — a scan is already running")
 
 
 def schedule_from_settings() -> None:
@@ -72,6 +67,7 @@ def schedule_from_settings() -> None:
 def start() -> None:
     if not scheduler.running:
         scheduler.start()
+    reset_stale_running(SessionLocal)  # a restart must not wedge scans as "running"
     schedule_from_settings()
 
 

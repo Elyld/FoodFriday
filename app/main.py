@@ -26,11 +26,12 @@ from app.deal_scan import (
     K_LAST_RESULT,
     K_LAST_RUN,
     K_PASSWORD,
+    K_STATUS,
     K_TIME,
     get_setting,
-    run_scan,
     set_setting,
     scan_enabled,
+    try_start_scan,
 )
 
 logger = logging.getLogger(__name__)
@@ -464,6 +465,7 @@ def settings_view(session: Session) -> dict:
         "deal_scan_time": get_setting(session, K_TIME, "07:00") or "07:00",
         "deal_scan_last_run": get_setting(session, K_LAST_RUN),
         "deal_scan_last_result": get_setting(session, K_LAST_RESULT),
+        "deal_scan_status": get_setting(session, K_STATUS, "idle") or "idle",
         "configured": scan_enabled(session),
     }
 
@@ -513,15 +515,23 @@ def clear_gmail(session: Session = Depends(get_session)):
     return settings_view(session)
 
 
-@app.post("/api/deals/scan")
-def scan_deals_now(session: Session = Depends(get_session)):
-    """Run the Gmail deal scan synchronously and return the result."""
+@app.post("/api/deals/scan", status_code=202)
+def scan_deals_now():
+    """Start a background deal scan and return immediately.
+
+    202 {"status": "started"} — the scan runs in a daemon thread; check the
+    Settings page (or GET /api/settings) for the result line.
+    409 if a scan is already running; 400 if Gmail isn't configured.
+    """
+    from app.database import SessionLocal
+
     try:
-        result = run_scan(session)
-    except Exception as exc:
-        logger.warning("manual deal scan failed: %s", exc)
-        raise HTTPException(502, f"Scan failed: {exc}")
-    return result
+        started = try_start_scan(SessionLocal)
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc))
+    if not started:
+        raise HTTPException(409, "a scan is already running")
+    return {"status": "started"}
 
 # ---------- import ----------
 

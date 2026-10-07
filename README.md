@@ -59,6 +59,8 @@ Add them by hand on the `/restaurants` page (🏷️ Deals section at the bottom
 
 The app scans your Gmail for promos itself — no manual imports. Open **/settings** and paste your Gmail address plus an app password; the scanner then runs every morning at your chosen time (default 7:00 AM) and turns concrete offers into deals. There's also a **🔍 Scan now** button on the Settings page.
 
+**Scans run in the background:** hitting Scan now returns instantly and the scan works through your promos behind the scenes — a first run over ~16 senders × 14 days of mail normally takes **1–3 minutes**. The Settings page shows a "🔄 Scan running…" notice while it's going, and the result line (e.g. "3 new deals") appears when it lands. If the button seems to do nothing, give it a couple of minutes and refresh. Overlapping scans are blocked: a second Scan now (or the daily job firing mid-scan) just stands down.
+
 **One-time setup:**
 1. Your Google account needs 2-step verification turned on.
 2. Go to `myaccount.google.com/apppasswords` → create an app password (name it "FoodFriday").

@@ -23,11 +23,14 @@ from app.database import init_db, SessionLocal  # noqa: E402
 from app.deal_scan import (  # noqa: E402
     K_ENABLED,
     K_PASSWORD,
+    K_STATUS,
     K_TIME,
     fetch_promos,
+    reset_stale_running,
     run_scan,
     scan_enabled,
     set_setting,
+    try_start_scan,
 )
 from app.models import Deal, Restaurant  # noqa: E402
 from app.main import app  # noqa: E402
@@ -90,8 +93,9 @@ class FakeIMAP:
 
     last_instance = None
 
-    def __init__(self, host):
+    def __init__(self, host, **kwargs):
         self.host = host
+        self.kwargs = kwargs
         self.logged_in = None
         self.peek_used = False
         FakeIMAP.last_instance = self
@@ -224,19 +228,48 @@ def _reset_deals():
         s.close()
 
 
-def test_scan_now_adds_deals_and_autocreates_restaurant(monkeypatch):
+def _patch_run_scan(monkeypatch):
+    """Route the background worker's run_scan through the fake mailbox."""
+    import app.deal_scan as ds
+
+    real = ds.run_scan
+    monkeypatch.setattr(ds, "run_scan", lambda session, imap_class=None: real(session, imap_class=_mailbox()))
+
+
+def _wait_status(want=("done", "error"), timeout=20):
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        s = SessionLocal()
+        try:
+            from app.deal_scan import get_setting
+
+            st = get_setting(s, K_STATUS, "idle")
+        finally:
+            s.close()
+        if st in want:
+            return st
+        time.sleep(0.1)
+    raise AssertionError(f"scan status never reached {want}")
+
+
+def _deal_count():
+    s = SessionLocal()
+    try:
+        return s.query(Deal).count()
+    finally:
+        s.close()
+
+
+def test_scan_now_starts_background_scan(monkeypatch):
     _reset_deals()
     _enable()
-    import app.main as main_mod
-
-    monkeypatch.setattr(main_mod, "run_scan",
-                        lambda session: __import__("app.deal_scan", fromlist=["run_scan"])
-                        .run_scan(session, imap_class=_mailbox()))
+    _patch_run_scan(monkeypatch)
     r = client.post("/api/deals/scan")
-    assert r.status_code == 200
-    data = r.json()
-    assert data["deals_added"] == 3
-    assert data["restaurants_added"] == 3  # Sonic, Arby's, Freddy's (auto-created)
+    assert r.status_code == 202
+    assert r.json()["status"] == "started"
+    assert _wait_status() == "done"
 
     s = SessionLocal()
     try:
@@ -245,6 +278,7 @@ def test_scan_now_adds_deals_and_autocreates_restaurant(monkeypatch):
         assert freddys.include_in_picks is True
         assert "auto-added" in (freddys.notes or "")
         deals = s.query(Deal).all()
+        assert len(deals) == 3
         assert all(d.source == "email" for d in deals)
         assert all(d.restaurant_id is not None for d in deals)
     finally:
@@ -252,22 +286,61 @@ def test_scan_now_adds_deals_and_autocreates_restaurant(monkeypatch):
 
 
 def test_scan_twice_is_idempotent(monkeypatch):
-    import app.main as main_mod
-
-    monkeypatch.setattr(main_mod, "run_scan",
-                        lambda session: __import__("app.deal_scan", fromlist=["run_scan"])
-                        .run_scan(session, imap_class=_mailbox()))
+    _patch_run_scan(monkeypatch)
+    before = _deal_count()
     r = client.post("/api/deals/scan")
-    assert r.status_code == 200
-    assert r.json()["deals_added"] == 0
-    assert r.json()["summary"] == "no new deals"
+    assert r.status_code == 202
+    assert _wait_status() == "done"
+    assert _deal_count() == before  # same promos → no dupes
+    s = SessionLocal()
+    try:
+        from app.deal_scan import get_setting
+
+        assert get_setting(s, "deal_scan_last_result") == "no new deals"
+    finally:
+        s.close()
+
+
+def test_scan_already_running_409():
+    _enable()
+    s = SessionLocal()
+    try:
+        set_setting(s, K_STATUS, "running")
+        s.commit()
+    finally:
+        s.close()
+    try:
+        r = client.post("/api/deals/scan")
+        assert r.status_code == 409
+        assert "already running" in r.json()["detail"].lower()
+    finally:
+        s = SessionLocal()
+        try:
+            set_setting(s, K_STATUS, "idle")
+            s.commit()
+        finally:
+            s.close()
 
 
 def test_scan_without_creds_fails():
     client.post("/api/settings/clear-gmail")
     r = client.post("/api/deals/scan")
-    assert r.status_code == 502
+    assert r.status_code == 400
     assert "not configured" in r.json()["detail"].lower()
+
+
+def test_scan_status_visible_in_settings(monkeypatch):
+    _enable()
+    _patch_run_scan(monkeypatch)
+    r = client.post("/api/deals/scan")
+    assert r.status_code == 202
+    assert _wait_status() == "done"
+    body = client.get("/api/settings").json()
+    assert body["deal_scan_status"] == "done"
+    assert body["deal_scan_last_result"]
+    page = client.get("/settings")
+    assert page.status_code == 200
+    assert "Scan running" not in page.text  # finished → shows last-scan line instead
 
 
 # ---------- scheduler ----------
@@ -317,5 +390,103 @@ def test_scan_enabled_helper():
         set_setting(s, K_ENABLED, "1")
         s.commit()
         assert scan_enabled(s) is True  # creds set by _enable()
+    finally:
+        s.close()
+
+
+# ---------- timeout + overlap ----------
+
+def test_imap_timeout_passed():
+    fetch_promos("u@gmail.com", "pw", imap_class=_mailbox(), today=TODAY)
+    assert FakeIMAP.last_instance.kwargs.get("timeout") == 30
+
+
+def test_stalled_connection_records_error_without_hanging():
+    """A connection that stalls (socket.timeout on connect) must fail fast
+    and record the error — never hang the scan thread."""
+    import socket
+    import time
+
+    class StalledIMAP:
+        def __init__(self, host, **kwargs):
+            assert kwargs.get("timeout") == 30
+            raise socket.timeout("timed out")  # what imaplib raises on a stalled connect
+
+    _enable()
+    s = SessionLocal()
+    start = time.time()
+    result = run_scan(s, imap_class=StalledIMAP)
+    elapsed = time.time() - start
+    s.close()
+    assert elapsed < 10  # failed immediately, no 30s+ hang
+    assert result["ok"] is False
+    assert "timed out" in result["error"]
+    s2 = SessionLocal()
+    try:
+        from app.deal_scan import get_setting
+
+        assert get_setting(s2, K_STATUS) == "error"
+        assert get_setting(s2, "deal_scan_last_result", "").startswith("error:")
+        assert get_setting(s2, "deal_scan_last_run")
+    finally:
+        s2.close()
+
+
+def test_try_start_scan_rejects_overlap():
+    _enable()
+    s = SessionLocal()
+    try:
+        set_setting(s, K_STATUS, "running")
+        s.commit()
+    finally:
+        s.close()
+    try:
+        assert try_start_scan(SessionLocal) is False
+    finally:
+        s = SessionLocal()
+        try:
+            set_setting(s, K_STATUS, "idle")
+            s.commit()
+        finally:
+            s.close()
+
+
+def test_scheduler_job_skips_when_scan_running(monkeypatch):
+    import app.deal_scan as ds
+
+    _enable()
+    calls = []
+    monkeypatch.setattr(ds, "run_scan", lambda *a, **k: calls.append(1) or {"ok": True})
+    s = SessionLocal()
+    try:
+        set_setting(s, K_STATUS, "running")
+        s.commit()
+    finally:
+        s.close()
+    try:
+        deal_scheduler._job()
+        assert calls == []  # manual scan in progress → scheduled run stands down
+    finally:
+        s = SessionLocal()
+        try:
+            set_setting(s, K_STATUS, "idle")
+            s.commit()
+        finally:
+            s.close()
+
+
+def test_reset_stale_running():
+    s = SessionLocal()
+    try:
+        set_setting(s, K_STATUS, "running")
+        s.commit()
+    finally:
+        s.close()
+    reset_stale_running(SessionLocal)
+    s = SessionLocal()
+    try:
+        from app.deal_scan import get_setting
+
+        assert get_setting(s, K_STATUS) == "idle"
     finally:
         s.close()

@@ -18,11 +18,13 @@ import email.utils
 import imaplib
 import logging
 import re
+import threading
 from datetime import date, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
 from app.deal_parse import chain_domains, parse_promo
+
 from app.models import Deal, Restaurant, Setting
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,12 @@ K_ENABLED = "deal_scan_enabled"
 K_TIME = "deal_scan_time"          # "HH:MM", 24h, local container time
 K_LAST_RUN = "deal_scan_last_run"      # ISO datetime
 K_LAST_RESULT = "deal_scan_last_result"  # human-readable summary
+K_STATUS = "deal_scan_status"            # idle | running | done | error
+
+# A stalled Gmail connection must never hang a request/scan forever.
+IMAP_TIMEOUT = 30  # seconds
+
+_scan_lock = threading.Lock()
 
 
 def get_setting(session: Session, key: str, default: str | None = None) -> str | None:
@@ -119,8 +127,11 @@ def fetch_promos(
     since = since or (today - timedelta(days=SCAN_WINDOW_DAYS))
     since_str = since.strftime("%d-%b-%Y")  # IMAP date format: 01-Oct-2026
 
-    conn = imap_class("imap.gmail.com")
+    conn = None
     try:
+        # timeout= keeps a stalled Gmail connection from hanging forever
+        # (imaplib.IMAP4_SSL supports it on 3.9+; test fakes must tolerate the kwarg).
+        conn = imap_class("imap.gmail.com", timeout=IMAP_TIMEOUT)
         conn.login(address, app_password)
         conn.select("INBOX", readonly=True)
         seen_uids: set[bytes] = set()
@@ -156,14 +167,15 @@ def fetch_promos(
             uniq.setdefault((d["restaurant"], d["title"].lower()), d)
         return list(uniq.values())
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-        try:
-            conn.logout()
-        except Exception:
-            pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            try:
+                conn.logout()
+            except Exception:
+                pass
 
 
 # ---------- write to DB ----------
@@ -225,15 +237,25 @@ def store_deals(session: Session, deals: list[dict]) -> tuple[int, int]:
 def run_scan(session: Session, imap_class=imaplib.IMAP4_SSL) -> dict:
     """Full scan: fetch promos over IMAP, store new deals, record the result.
 
-    Raises on connection/auth errors — the caller surfaces them.
+    Never raises for scan-time failures (bad creds, stalled connection, parse
+    errors): those are recorded into the last-result setting and returned as
+    ``{"ok": False, "error": ...}``. Only a missing Gmail configuration raises.
     """
     address = get_setting(session, K_ADDRESS)
     password = get_setting(session, K_PASSWORD)
     if not address or not password:
         raise RuntimeError("Gmail not configured — add your address and app password in Settings.")
-    deals = fetch_promos(address, password, imap_class=imap_class)
-    added, new_restaurants = store_deals(session, deals)
-    session.commit()
+    try:
+        deals = fetch_promos(address, password, imap_class=imap_class)
+        added, new_restaurants = store_deals(session, deals)
+    except Exception as exc:
+        now = datetime.now().isoformat(timespec="minutes")
+        set_setting(session, K_STATUS, "error")
+        set_setting(session, K_LAST_RUN, now)
+        set_setting(session, K_LAST_RESULT, f"error: {exc}")
+        session.commit()
+        logger.warning("deal scan failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
     now = datetime.now().isoformat(timespec="minutes")
     if added:
         summary = f"{added} new deal{'s' if added != 1 else ''}"
@@ -241,8 +263,74 @@ def run_scan(session: Session, imap_class=imaplib.IMAP4_SSL) -> dict:
             summary += f" ({new_restaurants} new restaurant{'s' if new_restaurants != 1 else ''} added)"
     else:
         summary = "no new deals"
+    set_setting(session, K_STATUS, "done")
     set_setting(session, K_LAST_RUN, now)
     set_setting(session, K_LAST_RESULT, summary)
     session.commit()
     return {"ok": True, "deals_found": len(deals), "deals_added": added,
             "restaurants_added": new_restaurants, "summary": summary}
+
+
+# ---------- background execution ----------
+
+def _scan_worker(session_factory, imap_class) -> None:
+    """Run a scan in a daemon thread with its own session.
+
+    Resolves run_scan via the module so tests can monkeypatch it.
+    """
+    import app.deal_scan as _self
+
+    session = session_factory()
+    try:
+        _self.run_scan(session, imap_class=imap_class)
+    except Exception as exc:  # belt & suspenders — run_scan already records failures
+        logger.warning("background deal scan crashed: %s", exc)
+        try:
+            set_setting(session, K_STATUS, "error")
+            set_setting(session, K_LAST_RUN, datetime.now().isoformat(timespec="minutes"))
+            set_setting(session, K_LAST_RESULT, f"error: {exc}")
+            session.commit()
+        except Exception:
+            pass
+    finally:
+        session.close()
+
+
+def try_start_scan(session_factory, imap_class=None) -> bool:
+    """Start a background scan unless one is already running.
+
+    Returns True if a scan was started, False if one is already running.
+    Raises RuntimeError if Gmail isn't configured.
+    """
+    if imap_class is None:
+        imap_class = imaplib.IMAP4_SSL
+    with _scan_lock:
+        session = session_factory()
+        try:
+            if not scan_configured(session):
+                raise RuntimeError(
+                    "Gmail not configured — add your address and app password in Settings."
+                )
+            if get_setting(session, K_STATUS) == "running":
+                return False
+            set_setting(session, K_STATUS, "running")
+            session.commit()
+        finally:
+            session.close()
+    thread = threading.Thread(
+        target=_scan_worker, args=(session_factory, imap_class), daemon=True,
+        name="foodfriday-deal-scan",
+    )
+    thread.start()
+    return True
+
+
+def reset_stale_running(session_factory) -> None:
+    """Clear a leftover 'running' status (e.g. container restarted mid-scan)."""
+    session = session_factory()
+    try:
+        if get_setting(session, K_STATUS) == "running":
+            set_setting(session, K_STATUS, "idle")
+            session.commit()
+    finally:
+        session.close()

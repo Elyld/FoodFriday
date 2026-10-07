@@ -185,10 +185,17 @@ def settings_page(s: dict) -> str:
     enabled = "checked" if s["deal_scan_enabled"] else ""
     last_run = fmt_date(s["deal_scan_last_run"][:10]) if s.get("deal_scan_last_run") else "never"
     last_result = s.get("deal_scan_last_result") or "—"
+    scan_status = s.get("deal_scan_status") or "idle"
     status = (
         "✅ configured — scans daily"
         if s["configured"]
         else ("⏸️ paused" if s["gmail_app_password_set"] else "⚠️ not configured")
+    )
+    scan_line = (
+        "<p style=\"color:#7a6552;font-size:.85rem\">🔄 <strong>Scan running…</strong> "
+        "this usually takes 1–3 minutes. The result will appear below when it's done.</p>"
+        if scan_status == "running"
+        else f"<p style=\"color:#7a6552;font-size:.85rem\">Last scan: {esc(last_run)} — {esc(last_result)}</p>"
     )
     body = f"""
 <h2>Settings</h2>
@@ -213,7 +220,7 @@ so the Friday boost works.</p>
     <button class="btn-secondary btn-small" type="button" onclick="scanNow()">🔍 Scan now</button>
     <button class="btn-danger btn-small" type="button" onclick="clearGmail()">Forget Gmail</button>
   </div>
-  <p style="color:#7a6552;font-size:.85rem">Last scan: {esc(last_run)} — {esc(last_result)}</p>
+  {scan_line}
 </form>
 <div id="scan-result"></div>
 <p style="color:#7a6552;font-size:.9rem"><strong>One-time setup:</strong> your Google account needs
