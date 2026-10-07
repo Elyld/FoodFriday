@@ -57,6 +57,10 @@ def _apply_column_migrations() -> None:
             for column in table.columns:
                 if column.name not in present:
                     coltype = column.type.compile(dialect=engine.dialect)
+                    default_sql = ""
+                    if column.server_default is not None:
+                        arg = column.server_default.arg
+                        default_sql = f" DEFAULT {arg}"
                     conn.exec_driver_sql(
-                        f"ALTER TABLE {table.name} ADD COLUMN {column.name} {coltype}"
+                        f"ALTER TABLE {table.name} ADD COLUMN {column.name} {coltype}{default_sql}"
                     )

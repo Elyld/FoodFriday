@@ -65,7 +65,8 @@ def test_confirm_then_idempotent():
     _upload(SEED)
     c1 = client.post("/api/import/confirm", json=SEED)
     assert c1.status_code == 200
-    assert c1.json() == {"restaurants_added": 2, "visits_added": 2}
+    assert c1.json() == {"restaurants_added": 2, "visits_added": 2,
+                         "deals_added": 0, "items_backfilled": 0}
 
     # Preview now shows nothing new...
     p = _upload(SEED).json()
@@ -74,7 +75,8 @@ def test_confirm_then_idempotent():
 
     # ...and a second confirm is a safe no-op.
     c2 = client.post("/api/import/confirm", json=SEED)
-    assert c2.json() == {"restaurants_added": 0, "visits_added": 0}
+    assert c2.json() == {"restaurants_added": 0, "visits_added": 0,
+                         "deals_added": 0, "items_backfilled": 0}
 
     visits = client.get("/api/visits").json()
     imported = [v for v in visits if v["restaurant_name"] in ("Taco Township", "Noodle Emporium")]

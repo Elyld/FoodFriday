@@ -149,3 +149,34 @@ form.card-form h3 { margin-top: 0; }
 
 .preview-box { background: var(--card); border-radius: 14px; padding: 1.2rem; border: 2px solid var(--cream-dark); margin: 1rem 0; }
 .preview-box ul { margin: 0.4rem 0; padding-left: 1.2rem; }
+
+/* Deals + picks toggle */
+.deal-badge {
+  display: inline-block; background: #fdf0d5; color: #9a5b00;
+  border: 1.5px dashed #e0a458; border-radius: 999px;
+  font-size: 0.8rem; font-weight: 700; padding: 0.15rem 0.6rem; margin: 0.3rem 0;
+}
+.skip-badge {
+  display: inline-block; background: #eee7d8; color: #7a6552;
+  border-radius: 999px; font-size: 0.72rem; font-weight: 600;
+  padding: 0.1rem 0.5rem; margin-left: 0.4rem; vertical-align: middle;
+}
+.btn-secondary.muted { opacity: 0.65; }
+.deal-list { display: grid; gap: 0.7rem; margin-top: 1rem; }
+.deal {
+  background: var(--card); border: 2px solid var(--cream-dark);
+  border-radius: 12px; padding: 0.8rem 1rem;
+}
+.deal.expired { opacity: 0.55; }
+.deal-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.deal-head strong { font-size: 1.05rem; }
+.deal-state {
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+  border-radius: 999px; padding: 0.1rem 0.55rem;
+  background: #dcefe0; color: #2e7d32;
+}
+.deal.expired .deal-state { background: #e8e0d0; color: #7a6552; }
+.deal-rest { font-size: 0.85rem; color: var(--brown-soft); }
+.deal-head .btn-danger { margin-left: auto; }
+.deal-desc { margin-top: 0.3rem; font-size: 0.92rem; }
+.deal-when, .deal-kw { font-size: 0.82rem; color: var(--brown-soft); margin-top: 0.15rem; }

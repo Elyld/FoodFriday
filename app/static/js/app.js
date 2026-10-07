@@ -43,6 +43,7 @@ function renderPicks(picks) {
       <div class="price">${priceStr(p.price_tier)}</div>
       <h3>${escapeHtml(p.name)}</h3>
       <div class="cuisine">${escapeHtml(p.cuisine || '')}${p.favorite ? ' ★' : ''}</div>
+      ${(p.deal_titles || []).map(t => `<div class="deal-badge">🏷️ ${escapeHtml(t)}</div>`).join('')}
       <div><span class="reason">${escapeHtml(p.reason)}</span></div>
       <div class="last">${p.last_visit ? 'Last visit: ' + fmtDate(p.last_visit) : 'Never been'}</div>
       <button class="eat" onclick="eatHere(${p.id}, ${JSON.stringify(p.name)})">We ate here ✓</button>
@@ -107,6 +108,11 @@ async function toggleFav(id) {
   catch (e) { toast('Couldn\'t update: ' + e.message); }
 }
 
+async function toggleInPicks(id) {
+  try { await api('POST', '/api/restaurants/' + id + '/in-picks'); location.reload(); }
+  catch (e) { toast('Couldn\'t update: ' + e.message); }
+}
+
 async function quickLog(id, name) {
   try {
     await api('POST', '/api/visits', { restaurant_id: id });
@@ -127,6 +133,31 @@ async function delVisit(id) {
   catch (e) { toast('Couldn\'t delete: ' + e.message); }
 }
 
+// ---- Deals ----
+async function addDeal(e) {
+  e.preventDefault();
+  const rid = document.getElementById('d-restaurant').value;
+  const body = {
+    restaurant_id: rid ? parseInt(rid, 10) : null,
+    title: document.getElementById('d-title').value.trim(),
+    description: document.getElementById('d-desc').value.trim() || null,
+    valid_from: document.getElementById('d-from').value || null,
+    valid_until: document.getElementById('d-until').value || null,
+    item_keywords: document.getElementById('d-kw').value.trim() || null,
+  };
+  try {
+    await api('POST', '/api/deals', body);
+    location.reload();
+  } catch (e) { toast('Couldn\'t add deal: ' + e.message); }
+  return false;
+}
+
+async function delDeal(id) {
+  if (!confirm('Delete this deal?')) return;
+  try { await api('DELETE', '/api/deals/' + id); location.reload(); }
+  catch (e) { toast('Couldn\'t delete deal: ' + e.message); }
+}
+
 // ---- Import ----
 let importPayload = null;
 
@@ -143,10 +174,12 @@ async function previewImport(e) {
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || r.statusText);
     importPayload = await file.text();
+    const dealItems = (data.deal_sample || []).map(s => '<li>🏷️ ' + escapeHtml(s) + '</li>').join('');
     box.innerHTML = `<div class="preview-box">
-      <strong>${data.new_restaurants} new restaurants · ${data.new_visits} new visits</strong>
+      <strong>${data.new_restaurants} new restaurants · ${data.new_visits} new visits · ${data.new_deals || 0} new deals</strong>
       ${data.skipped ? `<div style="color:#7a6552">${escapeHtml(data.skipped)}</div>` : ''}
-      <ul>${(data.sample || []).map(s => '<li>' + escapeHtml(s) + '</li>').join('')}</ul>
+      ${data.skipped_deals ? `<div style="color:#7a6552">${escapeHtml(data.skipped_deals)}</div>` : ''}
+      <ul>${(data.sample || []).map(s => '<li>' + escapeHtml(s) + '</li>').join('')}${dealItems}</ul>
       <button class="btn-primary btn-small" onclick="confirmImport()">Import it ✓</button>
     </div>`;
   } catch (err) {
@@ -160,7 +193,7 @@ async function confirmImport() {
   try {
     const data = await api('POST', '/api/import/confirm', JSON.parse(importPayload));
     document.getElementById('import-preview').innerHTML =
-      `<div class="preview-box"><strong>Done:</strong> ${data.restaurants_added} restaurants, ${data.visits_added} visits added.</div>`;
+      `<div class="preview-box"><strong>Done:</strong> ${data.restaurants_added} restaurants, ${data.visits_added} visits, ${data.deals_added || 0} deals added${data.items_backfilled ? `, ${data.items_backfilled} visits got item details` : ''}.</div>`;
     toast('Import complete 🎉');
   } catch (e) { toast('Import failed: ' + e.message); }
 }

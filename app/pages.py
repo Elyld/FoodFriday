@@ -68,7 +68,7 @@ def home_page() -> str:
     return layout("Pick dinner", body, "home")
 
 
-def restaurants_page(restaurants: list[dict]) -> str:
+def restaurants_page(restaurants: list[dict], deals: list[dict]) -> str:
     if not restaurants:
         rows = '<div class="empty">No restaurants yet. Add your first spot below — or <a href="/import">import</a> your history.</div>'
     else:
@@ -78,17 +78,52 @@ def restaurants_page(restaurants: list[dict]) -> str:
             star_cls = "star" if r["favorite"] else "star off"
             price = "$" * (r["price_tier"] or 1)
             last = fmt_date(r["last_visit"])
+            in_picks = r.get("include_in_picks", True)
+            picks_btn = (
+                '<button class="btn-secondary btn-small" onclick="toggleInPicks(%d)" title="Include in Friday picks">🎲 in picks</button>' % r["id"]
+                if in_picks else
+                '<button class="btn-secondary btn-small muted" onclick="toggleInPicks(%d)" title="Skipped in Friday picks — tap to include">🚫 skipped</button>' % r["id"]
+            )
+            skip_badge = '' if in_picks else ' <span class="skip-badge">skipped in picks</span>'
             trs.append(f"""<tr>
-<td data-label="Name"><strong>{esc(r["name"])}</strong><br><span style="color:#7a6552;font-size:.85rem">{esc(r["cuisine"] or "")}</span></td>
+<td data-label="Name"><strong>{esc(r["name"])}</strong>{skip_badge}<br><span style="color:#7a6552;font-size:.85rem">{esc(r["cuisine"] or "")}</span></td>
 <td data-label="Price" class="price">{price}</td>
 <td data-label="Visits">{r["visit_count"]}</td>
 <td data-label="Last visit">{esc(last)}</td>
 <td data-label="Actions" style="white-space:nowrap">
   <button class="{star_cls}" onclick="toggleFav({r["id"]})" title="Favorite">{star}</button>
+  {picks_btn}
   <button class="btn-secondary btn-small" onclick="quickLog({r["id"]}, '{esc(r["name"]).replace(chr(39), "")}')">We ate here tonight</button>
   <button class="btn-danger btn-small" onclick="delRestaurant({r["id"]}, '{esc(r["name"]).replace(chr(39), "")}')">Delete</button>
 </td></tr>""")
         rows = "<table class='grid'><thead><tr><th>Name</th><th>Price</th><th>Visits</th><th>Last visit</th><th>Actions</th></tr></thead><tbody>" + "".join(trs) + "</tbody></table>"
+
+    options = "".join(
+        f'<option value="{r["id"]}">{esc(r["name"])}</option>' for r in restaurants
+    )
+    if deals:
+        deal_items = []
+        for d in deals:
+            cls = "deal" if d["active"] else "deal expired"
+            kw = f'<div class="deal-kw">items: {esc(d["item_keywords"])}</div>' if d["item_keywords"] else ""
+            when = []
+            if d["valid_from"]:
+                when.append("from " + fmt_date(d["valid_from"]))
+            if d["valid_until"]:
+                when.append("until " + fmt_date(d["valid_until"]))
+            when_s = f'<div class="deal-when">{" · ".join(when)}</div>' if when else ""
+            state = "active" if d["active"] else "expired"
+            deal_items.append(f"""<div class="{cls}">
+  <div class="deal-head"><strong>🏷️ {esc(d["title"])}</strong>
+    <span class="deal-state">{state}</span>
+    <span class="deal-rest">{esc(d["restaurant_name"] or "anywhere")}</span>
+    <button class="btn-danger btn-small" onclick="delDeal({d["id"]})">Delete</button></div>
+  {f'<div class="deal-desc">{esc(d["description"])}</div>' if d["description"] else ""}
+  {when_s}{kw}
+</div>""")
+        deal_list = '<div class="deal-list">' + "".join(deal_items) + "</div>"
+    else:
+        deal_list = '<div class="empty">No deals yet. Add one below — active deals boost that restaurant on Friday.</div>'
 
     body = f"""
 <h2>Restaurants</h2>
@@ -106,6 +141,23 @@ def restaurants_page(restaurants: list[dict]) -> str:
   <button class="btn-primary btn-small" type="submit">Add restaurant</button>
 </form>
 {rows}
+<h2 style="margin-top:2rem">🏷️ Deals</h2>
+<p style="color:#7a6552">Active deals give a restaurant a boost on Friday — extra if the deal covers something you've actually ordered.</p>
+<form class="card-form" id="deal-form" onsubmit="return addDeal(event)">
+  <h3>Add a deal</h3>
+  <div class="form-row">
+    <div class="field"><label>Restaurant</label><select id="d-restaurant"><option value="">Anywhere (chain-wide)</option>{options}</select></div>
+    <div class="field"><label>Title</label><input id="d-title" required maxlength="255" placeholder="$1.49 Mozz Sticks today"></div>
+  </div>
+  <div class="form-row">
+    <div class="field"><label>Valid from (optional)</label><input id="d-from" type="date"></div>
+    <div class="field"><label>Valid until (optional)</label><input id="d-until" type="date"></div>
+  </div>
+  <div class="field"><label>Description (optional)</label><input id="d-desc" maxlength="500"></div>
+  <div class="field"><label>Item keywords (optional, comma-separated)</label><input id="d-kw" maxlength="500" placeholder="mozz sticks, corn dog"></div>
+  <button class="btn-primary btn-small" type="submit">Add deal</button>
+</form>
+{deal_list}
 """
     return layout("Restaurants", body, "restaurants")
 
@@ -147,7 +199,14 @@ def import_page() -> str:
   "visits": [
     {"restaurant": "Taco Town",
      "visited_at": "2026-06-05", "total": 32.50,
-     "source": "import", "external_id": "gmail:abc123"}
+     "source": "import", "external_id": "gmail:abc123",
+     "items": ["Bowl", "Chips"]}
+  ],
+  "deals": [
+    {"restaurant": "Taco Town", "title": "$1.49 Mozz Sticks today",
+     "description": "App-only", "valid_from": "2026-10-07",
+     "valid_until": "2026-10-07", "item_keywords": ["mozz sticks"],
+     "source": "email"}
   ]
 }</pre>
 </div>

@@ -1,1 +1,62 @@
-{"_note":"SAMPLE DATA ONLY — every name, date, and total here is made up. Use this file to try the Import page.","restaurants":[{"cuisine":"Mexican","favorite":true,"name":"Taco Town","notes":"Great salsa bar","price_tier":1},{"cuisine":"Ramen","favorite":false,"name":"Noodle Palace","notes":"","price_tier":2},{"cuisine":"American","favorite":false,"name":"The Fancy Fork","notes":"Anniversary spot","price_tier":3}],"visits":[{"external_id":"sample:1","restaurant":"Taco Town","source":"import","total":32.5,"visited_at":"2026-06-05"},{"external_id":"sample:2","restaurant":"Noodle Palace","source":"import","total":41.0,"visited_at":"2026-06-12"},{"external_id":"sample:3","restaurant":"Taco Town","source":"import","total":28.75,"visited_at":"2026-07-03"}]}
+{
+ "_note": "SAMPLE DATA ONLY \u2014 every name, date, and total here is made up. Use this file to try the Import page.",
+ "restaurants": [
+  {
+   "cuisine": "Mexican",
+   "favorite": true,
+   "name": "Taco Town",
+   "notes": "Great salsa bar",
+   "price_tier": 1
+  },
+  {
+   "cuisine": "Ramen",
+   "favorite": false,
+   "name": "Noodle Palace",
+   "notes": "",
+   "price_tier": 2
+  },
+  {
+   "cuisine": "American",
+   "favorite": false,
+   "name": "The Fancy Fork",
+   "notes": "Anniversary spot",
+   "price_tier": 3
+  }
+ ],
+ "visits": [
+  {
+   "external_id": "sample:1",
+   "restaurant": "Taco Town",
+   "source": "import",
+   "total": 32.5,
+   "visited_at": "2026-06-05"
+  },
+  {
+   "external_id": "sample:2",
+   "restaurant": "Noodle Palace",
+   "source": "import",
+   "total": 41.0,
+   "visited_at": "2026-06-12"
+  },
+  {
+   "external_id": "sample:3",
+   "restaurant": "Taco Town",
+   "source": "import",
+   "total": 28.75,
+   "visited_at": "2026-07-03"
+  }
+ ],
+ "deals": [
+  {
+   "restaurant": "Taco Town",
+   "title": "Free chips with any bowl",
+   "description": "This week only",
+   "valid_from": "2026-10-06",
+   "valid_until": "2026-10-12",
+   "item_keywords": [
+    "chips"
+   ],
+   "source": "manual"
+  }
+ ]
+}

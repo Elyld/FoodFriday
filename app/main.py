@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app import pages, picker
 from app.database import get_session, init_db
-from app.models import Restaurant, Visit
+from app.models import Deal, Restaurant, Visit
 from app.version import APP_NAME, VERSION
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,7 @@ def restaurant_dict(r: Restaurant, visit_count: int, last_visit: date | None) ->
         "notes": r.notes,
         "address": r.address,
         "favorite": bool(r.favorite),
+        "include_in_picks": r.include_in_picks is not False,
         "visit_count": visit_count,
         "last_visit": last_visit.isoformat() if last_visit else None,
     }
@@ -85,7 +86,9 @@ def restaurants_page(session: Session = Depends(get_session)):
         restaurant_dict(r, counts.get(r.id, 0), lasts.get(r.id))
         for r in session.query(Restaurant).order_by(Restaurant.name).all()
     ]
-    return pages.restaurants_page(rows)
+    deals = [deal_dict(d) for d in session.query(Deal).all()]
+    deals.sort(key=lambda d: (not d["active"], d["valid_until"] or "9999", d["title"]))
+    return pages.restaurants_page(rows, deals)
 
 
 @app.get("/history", response_class=HTMLResponse)
@@ -123,6 +126,7 @@ class RestaurantIn(BaseModel):
     notes: str | None = None
     address: str | None = None
     favorite: bool | None = False
+    include_in_picks: bool | None = True
 
 
 @app.get("/api/restaurants")
@@ -147,6 +151,7 @@ def create_restaurant(payload: RestaurantIn, session: Session = Depends(get_sess
         notes=(payload.notes or "").strip() or None,
         address=(payload.address or "").strip() or None,
         favorite=bool(payload.favorite),
+        include_in_picks=False if payload.include_in_picks is False else True,
     )
     session.add(r)
     session.commit()
@@ -169,6 +174,8 @@ def update_restaurant(rid: int, payload: RestaurantIn, session: Session = Depend
     r.address = (payload.address or "").strip() or None
     if payload.favorite is not None:
         r.favorite = bool(payload.favorite)
+    if payload.include_in_picks is not None:
+        r.include_in_picks = bool(payload.include_in_picks)
     session.commit()
     return {"ok": True}
 
@@ -191,6 +198,16 @@ def toggle_favorite(rid: int, session: Session = Depends(get_session)):
     r.favorite = not r.favorite
     session.commit()
     return {"favorite": bool(r.favorite)}
+
+
+@app.post("/api/restaurants/{rid}/in-picks")
+def toggle_in_picks(rid: int, session: Session = Depends(get_session)):
+    r = session.get(Restaurant, rid)
+    if not r:
+        raise HTTPException(404, "Restaurant not found")
+    r.include_in_picks = not (r.include_in_picks is not False)
+    session.commit()
+    return {"include_in_picks": r.include_in_picks is not False}
 
 
 class VisitIn(BaseModel):
@@ -247,6 +264,115 @@ class PickIn(BaseModel):
     veto_ids: list[int] = []
 
 
+# ---------- deals ----------
+
+def deal_dict(d: Deal) -> dict:
+    active = picker.is_deal_active(
+        {
+            "valid_from": d.valid_from,
+            "valid_until": d.valid_until,
+            "created_at": d.created_at,
+        },
+        date.today(),
+    )
+    return {
+        "id": d.id,
+        "restaurant_id": d.restaurant_id,
+        "restaurant_name": d.restaurant.name if d.restaurant else None,
+        "title": d.title,
+        "description": d.description,
+        "valid_from": d.valid_from.isoformat() if d.valid_from else None,
+        "valid_until": d.valid_until.isoformat() if d.valid_until else None,
+        "item_keywords": d.item_keywords,
+        "source": d.source,
+        "active": active,
+    }
+
+
+def _norm_keywords(value) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        parts = [str(v).strip() for v in value if str(v).strip()]
+    else:
+        parts = [p.strip() for p in str(value).split(",") if p.strip()]
+    return ", ".join(parts) if parts else None
+
+
+class DealIn(BaseModel):
+    restaurant_id: int | None = None
+    title: str
+    description: str | None = None
+    valid_from: date | None = None
+    valid_until: date | None = None
+    item_keywords: str | list[str] | None = None
+    source: str | None = "manual"
+
+
+@app.get("/api/deals")
+def list_deals(restaurant_id: int | None = None, session: Session = Depends(get_session)):
+    q = session.query(Deal)
+    if restaurant_id is not None:
+        q = q.filter(Deal.restaurant_id == restaurant_id)
+    deals = [deal_dict(d) for d in q.all()]
+    deals.sort(key=lambda d: (not d["active"], d["valid_until"] or "9999", d["title"]))
+    return deals
+
+
+@app.post("/api/deals", status_code=201)
+def create_deal(payload: DealIn, session: Session = Depends(get_session)):
+    title = (payload.title or "").strip()
+    if not title:
+        raise HTTPException(400, "Title is required")
+    if payload.restaurant_id is not None and not session.get(Restaurant, payload.restaurant_id):
+        raise HTTPException(404, "Restaurant not found")
+    d = Deal(
+        restaurant_id=payload.restaurant_id,
+        title=title,
+        description=(payload.description or "").strip() or None,
+        valid_from=payload.valid_from,
+        valid_until=payload.valid_until,
+        item_keywords=_norm_keywords(payload.item_keywords),
+        source=(payload.source or "manual").strip() or "manual",
+    )
+    session.add(d)
+    session.commit()
+    session.refresh(d)
+    return deal_dict(d)
+
+
+@app.put("/api/deals/{did}")
+def update_deal(did: int, payload: DealIn, session: Session = Depends(get_session)):
+    d = session.get(Deal, did)
+    if not d:
+        raise HTTPException(404, "Deal not found")
+    title = (payload.title or "").strip()
+    if not title:
+        raise HTTPException(400, "Title is required")
+    if payload.restaurant_id is not None and not session.get(Restaurant, payload.restaurant_id):
+        raise HTTPException(404, "Restaurant not found")
+    d.restaurant_id = payload.restaurant_id
+    d.title = title
+    d.description = (payload.description or "").strip() or None
+    d.valid_from = payload.valid_from
+    d.valid_until = payload.valid_until
+    d.item_keywords = _norm_keywords(payload.item_keywords)
+    if payload.source:
+        d.source = payload.source.strip() or "manual"
+    session.commit()
+    return deal_dict(d)
+
+
+@app.delete("/api/deals/{did}", status_code=204)
+def delete_deal(did: int, session: Session = Depends(get_session)):
+    d = session.get(Deal, did)
+    if not d:
+        raise HTTPException(404, "Deal not found")
+    session.delete(d)
+    session.commit()
+    return None
+
+
 @app.post("/api/pick")
 def pick(payload: PickIn, session: Session = Depends(get_session)):
     counts, lasts = visit_stats(session)
@@ -260,9 +386,31 @@ def pick(payload: PickIn, session: Session = Depends(get_session)):
             "favorite": bool(r.favorite),
         }
         for r in restaurants
+        if r.include_in_picks is not False
     ]
     last_by_id = {rid: d for rid, d in lasts.items()}
-    stats = picker.candidate_stats(dicts, last_by_id)
+
+    today = date.today()
+    deals_by_id: dict[int, list[dict]] = {}
+    for d in session.query(Deal).all():
+        dd = {
+            "title": d.title,
+            "valid_from": d.valid_from,
+            "valid_until": d.valid_until,
+            "created_at": d.created_at,
+            "item_keywords": d.item_keywords,
+        }
+        if d.restaurant_id is not None and picker.is_deal_active(dd, today):
+            deals_by_id.setdefault(d.restaurant_id, []).append(dd)
+
+    items_by_id: dict[int, list[str]] = {}
+    for v in session.query(Visit).filter(Visit.items.isnot(None)).all():
+        items_by_id.setdefault(v.restaurant_id, []).extend(
+            [i.strip() for i in (v.items or "").splitlines() if i.strip()]
+        )
+
+    stats = picker.candidate_stats(dicts, last_by_id, today=today,
+                                   deals_by_id=deals_by_id, items_by_id=items_by_id)
     picks = picker.pick_three(stats, tuple(payload.keep_ids), tuple(payload.veto_ids))
     return {
         "picks": [
@@ -274,6 +422,7 @@ def pick(payload: PickIn, session: Session = Depends(get_session)):
                 "favorite": p["favorite"],
                 "last_visit": p["last_visit"].isoformat() if p["last_visit"] else None,
                 "reason": p["reason"],
+                "deal_titles": p.get("deal_titles", []),
             }
             for p in picks
         ]
@@ -282,15 +431,16 @@ def pick(payload: PickIn, session: Session = Depends(get_session)):
 
 # ---------- import ----------
 
-def _parse_seed(data: dict) -> tuple[list[dict], list[dict]]:
-    """Validate the seed JSON shape. Returns (restaurants, visits)."""
+def _parse_seed(data: dict) -> tuple[list[dict], list[dict], list[dict]]:
+    """Validate the seed JSON shape. Returns (restaurants, visits, deals)."""
     if not isinstance(data, dict):
         raise HTTPException(400, "Seed file must be a JSON object")
     restaurants = data.get("restaurants", [])
     visits = data.get("visits", [])
-    if not isinstance(restaurants, list) or not isinstance(visits, list):
-        raise HTTPException(400, '"restaurants" and "visits" must be lists')
-    clean_r, clean_v = [], []
+    deals = data.get("deals", [])
+    if not isinstance(restaurants, list) or not isinstance(visits, list) or not isinstance(deals, list):
+        raise HTTPException(400, '"restaurants", "visits" and "deals" must be lists')
+    clean_r, clean_v, clean_d = [], [], []
     for r in restaurants:
         name = (r.get("name") or "").strip() if isinstance(r, dict) else ""
         if not name:
@@ -304,6 +454,7 @@ def _parse_seed(data: dict) -> tuple[list[dict], list[dict]]:
                 "notes": (r.get("notes") or "").strip() or None,
                 "address": (r.get("address") or "").strip() or None,
                 "favorite": bool(r.get("favorite")),
+                "include_in_picks": False if r.get("include_in_picks") is False else True,
             }
         )
     for v in visits:
@@ -313,6 +464,13 @@ def _parse_seed(data: dict) -> tuple[list[dict], list[dict]]:
             visited_at = date.fromisoformat(str(v.get("visited_at", "")))
         except ValueError:
             continue
+        items = v.get("items")
+        if isinstance(items, (list, tuple)):
+            items = "\n".join(str(i).strip() for i in items if str(i).strip()) or None
+        elif isinstance(items, str):
+            items = items.strip() or None
+        else:
+            items = None
         clean_v.append(
             {
                 "restaurant": (v.get("restaurant") or "").strip(),
@@ -320,12 +478,39 @@ def _parse_seed(data: dict) -> tuple[list[dict], list[dict]]:
                 "total": v.get("total"),
                 "source": (v.get("source") or "import"),
                 "external_id": (v.get("external_id") or "").strip() or None,
+                "items": items,
             }
         )
-    return clean_r, clean_v
+    for d in deals:
+        if not isinstance(d, dict):
+            continue
+        title = (d.get("title") or "").strip()
+        if not title:
+            continue
+        try:
+            valid_from = date.fromisoformat(str(d["valid_from"])) if d.get("valid_from") else None
+        except ValueError:
+            valid_from = None
+        try:
+            valid_until = date.fromisoformat(str(d["valid_until"])) if d.get("valid_until") else None
+        except ValueError:
+            valid_until = None
+        clean_d.append(
+            {
+                "restaurant": (d.get("restaurant") or "").strip() or None,
+                "title": title,
+                "description": (d.get("description") or "").strip() or None,
+                "valid_from": valid_from,
+                "valid_until": valid_until,
+                "item_keywords": _norm_keywords(d.get("item_keywords")),
+                "source": (d.get("source") or "import").strip() or "import",
+            }
+        )
+    return clean_r, clean_v, clean_d
 
 
-def _import_preview(session: Session, restaurants: list[dict], visits: list[dict]) -> dict:
+def _import_preview(session: Session, restaurants: list[dict], visits: list[dict],
+                    deals: list[dict] | None = None) -> dict:
     existing_names = {_norm_name(r.name) for r in session.query(Restaurant).all()}
     existing_ext = {
         v.external_id for v in session.query(Visit).filter(Visit.external_id.isnot(None)).all()
@@ -359,13 +544,39 @@ def _import_preview(session: Session, restaurants: list[dict], visits: list[dict
             continue
         new_visits.append(v)
 
+    new_deals = []
+    skipped_deals = 0
+    existing_deal_keys = {
+        (_norm_name(d.restaurant.name) if d.restaurant else "", _norm_name(d.title),
+         d.valid_from.isoformat() if d.valid_from else "")
+        for d in session.query(Deal).all()
+    }
+    for d in deals or []:
+        key = _norm_name(d["restaurant"]) if d["restaurant"] else ""
+        rid = name_to_id.get(key) if key else None
+        if d["restaurant"] and rid is None:
+            # restaurant new in this same import
+            if not any(_norm_name(nr["name"]) == key for nr in new_restaurants):
+                skipped_deals += 1
+                continue
+        deal_key = (key, _norm_name(d["title"]), d["valid_from"].isoformat() if d["valid_from"] else "")
+        if deal_key in existing_deal_keys:
+            continue
+        new_deals.append(d)
+
     sample = [f'{v["restaurant"]} — {v["visited_at"].isoformat()}' for v in new_visits[:5]]
-    return {
+    deal_sample = [f'{d["restaurant"] or "anywhere"}: {d["title"]}' for d in new_deals[:5]]
+    out = {
         "new_restaurants": len(new_restaurants),
         "new_visits": len(new_visits),
         "skipped": f"{skipped} visits skipped (unknown restaurant)" if skipped else "",
         "sample": sample,
+        "new_deals": len(new_deals),
+        "deal_sample": deal_sample,
     }
+    if skipped_deals:
+        out["skipped_deals"] = f"{skipped_deals} deals skipped (unknown restaurant)"
+    return out
 
 
 @app.post("/api/import/preview")
@@ -374,13 +585,13 @@ async def import_preview(file: UploadFile = File(...), session: Session = Depend
         data = json.loads((await file.read()).decode("utf-8"))
     except Exception:
         raise HTTPException(400, "Couldn't read that file as JSON")
-    restaurants, visits = _parse_seed(data)
-    return _import_preview(session, restaurants, visits)
+    restaurants, visits, deals = _parse_seed(data)
+    return _import_preview(session, restaurants, visits, deals)
 
 
 @app.post("/api/import/confirm")
 async def import_confirm(payload: dict, session: Session = Depends(get_session)):
-    restaurants, visits = _parse_seed(payload)
+    restaurants, visits, deals = _parse_seed(payload)
 
     existing = {_norm_name(r.name): r for r in session.query(Restaurant).all()}
     added_r = 0
@@ -399,11 +610,23 @@ async def import_confirm(payload: dict, session: Session = Depends(get_session))
         (v.restaurant_id, v.visited_at.isoformat()) for v in session.query(Visit).all()
     }
     added_v = 0
+    items_backfilled = 0
     for v in visits:
         r = existing.get(_norm_name(v["restaurant"]))
         if r is None:
             continue
         if v["external_id"] and v["external_id"] in existing_ext:
+            # duplicate — but backfill item names if we now have them and the
+            # stored visit doesn't
+            if v["items"]:
+                stored = (
+                    session.query(Visit)
+                    .filter(Visit.external_id == v["external_id"], Visit.items.is_(None))
+                    .first()
+                )
+                if stored:
+                    stored.items = v["items"]
+                    items_backfilled += 1
             continue
         if (r.id, v["visited_at"].isoformat()) in existing_pairs:
             continue
@@ -419,6 +642,7 @@ async def import_confirm(payload: dict, session: Session = Depends(get_session))
                 total=total,
                 source=v["source"],
                 external_id=v["external_id"],
+                items=v["items"],
             )
         )
         if v["external_id"]:
@@ -426,5 +650,44 @@ async def import_confirm(payload: dict, session: Session = Depends(get_session))
         existing_pairs.add((r.id, v["visited_at"].isoformat()))
         added_v += 1
 
+    existing_deal_keys = {
+        (_norm_name(d.restaurant.name) if d.restaurant else "", _norm_name(d.title),
+         d.valid_from.isoformat() if d.valid_from else "")
+        for d in session.query(Deal).all()
+    }
+    added_d = 0
+    for d in deals:
+        rid = None
+        if d["restaurant"]:
+            r = existing.get(_norm_name(d["restaurant"]))
+            if r is None:
+                continue
+            rid = r.id
+        key = (
+            _norm_name(d["restaurant"]) if d["restaurant"] else "",
+            _norm_name(d["title"]),
+            d["valid_from"].isoformat() if d["valid_from"] else "",
+        )
+        if key in existing_deal_keys:
+            continue
+        session.add(
+            Deal(
+                restaurant_id=rid,
+                title=d["title"],
+                description=d["description"],
+                valid_from=d["valid_from"],
+                valid_until=d["valid_until"],
+                item_keywords=d["item_keywords"],
+                source=d["source"],
+            )
+        )
+        existing_deal_keys.add(key)
+        added_d += 1
+
     session.commit()
-    return {"restaurants_added": added_r, "visits_added": added_v}
+    return {
+        "restaurants_added": added_r,
+        "visits_added": added_v,
+        "deals_added": added_d,
+        "items_backfilled": items_backfilled,
+    }

@@ -42,21 +42,42 @@ def seed():
     init_db()
     c = TestClient(app)
     today = date.today()
+    ids = {}
     for name, cuisine, tier, fav, days_ago in DEMO:
         r = c.post("/api/restaurants", json={
             "name": name, "cuisine": cuisine, "price_tier": tier, "favorite": fav,
         }).json()
+        ids[name] = r["id"]
         if days_ago is not None:
             c.post("/api/visits", json={
                 "restaurant_id": r["id"],
                 "visited_at": (today - timedelta(days=days_ago)).isoformat(),
                 "total": round(20 + (hash(name) % 4000) / 100, 2),
             })
+    # demo deal so the pick card shows the badge
+    c.post("/api/deals", json={
+        "restaurant_id": ids["El Toro Loco"],
+        "title": "Taco Tuesday: $2 street tacos",
+        "description": "Every Tuesday, dine-in only.",
+        "valid_from": (today - timedelta(days=1)).isoformat(),
+        "valid_until": (today + timedelta(days=6)).isoformat(),
+        "item_keywords": "taco",
+        "source": "manual",
+    })
+    # one excluded restaurant shows the skip marker
+    c.post(f"/api/restaurants/{ids['Dragon Wok']}/in-picks")
+    return ids
 
 
 def main():
-    seed()
+    ids = seed()
     env = {**os.environ, "PYTHONPATH": str(BASE)}
+
+    def api_post(path):
+        req = urllib.request.Request(
+            "http://127.0.0.1:4002" + path, data=b"", method="POST")
+        urllib.request.urlopen(req, timeout=5).read()
+
     server = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app", "--port", "4002"],
         cwd=str(BASE), env=env,
@@ -74,6 +95,14 @@ def main():
 
         out = BASE / "docs" / "screenshots"
         out.mkdir(parents=True, exist_ok=True)
+
+        # narrow the field so the pick shot deterministically includes the deal card
+        # (Dragon Wok is already off from seed(); leave it alone)
+        keep = {"El Toro Loco", "Sakura Sushi", "Big Q BBQ", "Dragon Wok"}
+        narrowed = [rid for name, rid in ids.items() if name not in keep]
+        for rid in narrowed:
+            api_post(f"/api/restaurants/{rid}/in-picks")
+
         with sync_playwright() as pw:
             browser = pw.chromium.launch(executable_path=CHROME, args=["--no-sandbox"])
 
@@ -83,8 +112,14 @@ def main():
             page.wait_for_timeout(900)
             page.screenshot(path=str(out / "home-picks.png"))
 
+            # restore everyone, then shoot the restaurants page + deals section
+            for rid in narrowed:
+                api_post(f"/api/restaurants/{rid}/in-picks")
             page.goto("http://127.0.0.1:4002/restaurants", wait_until="networkidle")
             page.screenshot(path=str(out / "restaurants.png"))
+            page.evaluate("document.querySelector('#deal-form').scrollIntoView()")
+            page.wait_for_timeout(400)
+            page.screenshot(path=str(out / "restaurants-deals.png"))
 
             mob = browser.new_page(viewport={"width": 390, "height": 844})
             mob.goto("http://127.0.0.1:4002/", wait_until="networkidle")
