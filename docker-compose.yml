@@ -1,0 +1,36 @@
+# FoodFriday — Friday dinner decider (working name; will change).
+#
+# Plug n' play via GHCR. No build needed:
+#
+#   docker compose up -d
+#
+# Then open http://localhost:4002 (or your FOODFRIDAY_PORT).
+#
+# To build the image locally instead of pulling, uncomment the `build:` line.
+
+services:
+  foodfriday:
+    image: ghcr.io/elyld/foodfriday:latest
+    # build: .
+    container_name: foodfriday-dinner-decider
+    restart: unless-stopped
+    ports:
+      - "${FOODFRIDAY_PORT:-4002}:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      FOODFRIDAY_DATA_DIR: /data
+FOODFRIDAY_DATABASE_URL: <redacted>
+    volumes:
+      # SQLite database file persists on the host.
+      - ./data:/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4).status==200 else 1)
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3

@@ -1,0 +1,151 @@
+/* FoodFriday — warm and simple. Cream, paprika, warm browns. */
+
+:root {
+  --cream: #faf5ec;
+  --cream-dark: #f3ead9;
+  --paprika: #c0392b;
+  --paprika-dark: #96281b;
+  --tomato: #e0674f;
+  --brown: #4a3728;
+  --brown-soft: #7a6552;
+  --card: #fffdf8;
+  --gold: #d4a017;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--cream);
+  color: var(--brown);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
+}
+
+header.topbar {
+  background: var(--paprika);
+  color: #fff;
+  padding: 0.9rem 1.2rem;
+  display: flex;
+  align-items: center;
+  gap: 1.2rem;
+  flex-wrap: wrap;
+}
+
+header.topbar .brand {
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}
+
+header.topbar nav a {
+  color: #ffe9e2;
+  text-decoration: none;
+  margin-right: 1rem;
+  font-weight: 600;
+}
+
+header.topbar nav a:hover, header.topbar nav a.active { color: #fff; text-decoration: underline; }
+
+main { max-width: 960px; margin: 0 auto; padding: 1.2rem; }
+
+.hero { text-align: center; padding: 2rem 1rem 1rem; }
+.hero h1 { font-size: 2rem; margin: 0 0 0.4rem; }
+.hero p { color: var(--brown-soft); margin: 0 0 1.4rem; }
+
+button, .btn {
+  font: inherit;
+  cursor: pointer;
+  border: none;
+  border-radius: 12px;
+  padding: 0.7rem 1.3rem;
+  font-weight: 700;
+}
+
+.btn-primary {
+  background: var(--paprika);
+  color: #fff;
+  font-size: 1.2rem;
+  padding: 1rem 2.2rem;
+  box-shadow: 0 3px 0 var(--paprika-dark);
+}
+
+.btn-primary:active { transform: translateY(2px); box-shadow: none; }
+.btn-secondary { background: var(--cream-dark); color: var(--brown); }
+.btn-small { padding: 0.4rem 0.8rem; font-size: 0.9rem; border-radius: 9px; }
+.btn-danger { background: #fff; color: var(--paprika); border: 1px solid var(--paprika); }
+
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 1.6rem; }
+@media (max-width: 700px) { .cards { grid-template-columns: 1fr; } }
+
+.pick-card {
+  background: var(--card);
+  border: 2px solid var(--cream-dark);
+  border-radius: 16px;
+  padding: 1.2rem;
+  text-align: center;
+  position: relative;
+}
+
+.pick-card h3 { margin: 0.2rem 0; font-size: 1.3rem; }
+.pick-card .cuisine { color: var(--brown-soft); font-size: 0.95rem; }
+.pick-card .reason {
+  display: inline-block;
+  background: var(--cream-dark);
+  border-radius: 20px;
+  padding: 0.25rem 0.8rem;
+  font-size: 0.85rem;
+  margin: 0.6rem 0;
+  color: var(--brown-soft);
+}
+.pick-card .last { font-size: 0.85rem; color: var(--brown-soft); margin-bottom: 0.8rem; }
+.pick-card .price { color: var(--gold); font-weight: 800; letter-spacing: 2px; }
+.pick-card .veto {
+  position: absolute; top: 0.5rem; right: 0.6rem;
+  background: none; border: none; font-size: 1.1rem; color: var(--brown-soft);
+  padding: 0.2rem 0.4rem;
+}
+.pick-card .eat { background: var(--paprika); color: #fff; width: 100%; margin-top: 0.4rem; }
+
+.pick-actions { text-align: center; margin-top: 1.4rem; display: flex; gap: 0.8rem; justify-content: center; }
+
+.empty { text-align: center; color: var(--brown-soft); padding: 2.5rem 1rem; }
+.empty a { color: var(--paprika); font-weight: 700; }
+
+table.grid { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 14px; overflow: hidden; }
+table.grid th, table.grid td { padding: 0.7rem 0.9rem; text-align: left; border-bottom: 1px solid var(--cream-dark); }
+table.grid th { background: var(--cream-dark); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px; }
+table.grid tr:last-child td { border-bottom: none; }
+@media (max-width: 700px) {
+  table.grid thead { display: none; }
+  table.grid tr { display: block; border-bottom: 2px solid var(--cream-dark); padding: 0.4rem; }
+  table.grid td { display: flex; justify-content: space-between; border: none; padding: 0.35rem 0.6rem; }
+  table.grid td::before { content: attr(data-label); font-weight: 700; color: var(--brown-soft); }
+}
+
+form.card-form { background: var(--card); border-radius: 14px; padding: 1.2rem; margin-bottom: 1.4rem; border: 2px solid var(--cream-dark); }
+form.card-form h3 { margin-top: 0; }
+.field { margin-bottom: 0.8rem; }
+.field label { display: block; font-weight: 700; font-size: 0.9rem; margin-bottom: 0.25rem; }
+.field input, .field select, .field textarea {
+  width: 100%; font: inherit; padding: 0.55rem 0.7rem;
+  border: 1.5px solid var(--cream-dark); border-radius: 9px; background: #fff;
+}
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
+@media (max-width: 700px) { .form-row { grid-template-columns: 1fr; } }
+
+.star { color: var(--gold); font-size: 1.2rem; background: none; border: none; padding: 0.2rem; }
+.star.off { color: #d8cdb8; }
+
+.toast {
+  position: fixed; bottom: 1.2rem; left: 50%; transform: translateX(-50%);
+  background: var(--brown); color: #fff; padding: 0.8rem 1.4rem;
+  border-radius: 12px; font-weight: 600; z-index: 50;
+  opacity: 0; transition: opacity 0.25s; pointer-events: none;
+}
+.toast.show { opacity: 1; }
+
+.spinner { text-align: center; padding: 2rem; font-size: 1.4rem; }
+
+.preview-box { background: var(--card); border-radius: 14px; padding: 1.2rem; border: 2px solid var(--cream-dark); margin: 1rem 0; }
+.preview-box ul { margin: 0.4rem 0; padding-left: 1.2rem; }
