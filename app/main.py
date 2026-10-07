@@ -17,16 +17,33 @@ from sqlalchemy.orm import Session
 
 from app import pages, picker
 from app.database import get_session, init_db
-from app.models import Deal, Restaurant, Visit
+from app.models import Deal, Restaurant, Setting, Visit
 from app.version import APP_NAME, VERSION
+from app import scheduler as deal_scheduler
+from app.deal_scan import (
+    K_ADDRESS,
+    K_ENABLED,
+    K_LAST_RESULT,
+    K_LAST_RUN,
+    K_PASSWORD,
+    K_TIME,
+    get_setting,
+    run_scan,
+    set_setting,
+    scan_enabled,
+)
 
 logger = logging.getLogger(__name__)
+
+MASKED = "********"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    deal_scheduler.start()
     yield
+    deal_scheduler.shutdown()
 
 
 app = FastAPI(title=APP_NAME, version=VERSION, lifespan=lifespan)
@@ -110,6 +127,11 @@ def history_page(session: Session = Depends(get_session)):
 @app.get("/import", response_class=HTMLResponse)
 def import_page():
     return pages.import_page()
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(session: Session = Depends(get_session)):
+    return pages.settings_page(settings_view(session))
 
 
 # ---------- API ----------
@@ -428,6 +450,78 @@ def pick(payload: PickIn, session: Session = Depends(get_session)):
         ]
     }
 
+
+# ---------- settings (deal scanner) ----------
+
+def settings_view(session: Session) -> dict:
+    """Settings for display/API — the app password is never returned."""
+    pw = get_setting(session, K_PASSWORD)
+    return {
+        "gmail_address": get_setting(session, K_ADDRESS) or "",
+        "gmail_app_password_set": bool(pw),
+        "gmail_app_password": MASKED if pw else "",
+        "deal_scan_enabled": get_setting(session, K_ENABLED, "1") == "1",
+        "deal_scan_time": get_setting(session, K_TIME, "07:00") or "07:00",
+        "deal_scan_last_run": get_setting(session, K_LAST_RUN),
+        "deal_scan_last_result": get_setting(session, K_LAST_RESULT),
+        "configured": scan_enabled(session),
+    }
+
+
+class SettingsIn(BaseModel):
+    gmail_address: str | None = None
+    gmail_app_password: str | None = None  # write-only; ignored when empty/masked
+    deal_scan_enabled: bool | None = None
+    deal_scan_time: str | None = None  # "HH:MM"
+
+
+@app.get("/api/settings")
+def get_settings(session: Session = Depends(get_session)):
+    return settings_view(session)
+
+
+@app.put("/api/settings")
+def update_settings(payload: SettingsIn, session: Session = Depends(get_session)):
+    if payload.gmail_address is not None:
+        set_setting(session, K_ADDRESS, payload.gmail_address.strip() or None)
+    if payload.gmail_app_password and payload.gmail_app_password != MASKED:
+        set_setting(session, K_PASSWORD, payload.gmail_app_password.strip() or None)
+    if payload.deal_scan_enabled is not None:
+        set_setting(session, K_ENABLED, "1" if payload.deal_scan_enabled else "0")
+    if payload.deal_scan_time is not None:
+        t = payload.deal_scan_time.strip()
+        import re
+
+        if not re.fullmatch(r"\d{1,2}:\d{2}", t):
+            raise HTTPException(400, 'Scan time must be HH:MM (24h)')
+        h, m = int(t.split(":")[0]), int(t.split(":")[1])
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            raise HTTPException(400, "Scan time must be a real time of day")
+        set_setting(session, K_TIME, f"{h:02d}:{m:02d}")
+    session.commit()
+    deal_scheduler.schedule_from_settings()
+    return settings_view(session)
+
+
+@app.post("/api/settings/clear-gmail")
+def clear_gmail(session: Session = Depends(get_session)):
+    """Forget the stored Gmail credentials entirely."""
+    set_setting(session, K_ADDRESS, None)
+    set_setting(session, K_PASSWORD, None)
+    session.commit()
+    deal_scheduler.schedule_from_settings()
+    return settings_view(session)
+
+
+@app.post("/api/deals/scan")
+def scan_deals_now(session: Session = Depends(get_session)):
+    """Run the Gmail deal scan synchronously and return the result."""
+    try:
+        result = run_scan(session)
+    except Exception as exc:
+        logger.warning("manual deal scan failed: %s", exc)
+        raise HTTPException(502, f"Scan failed: {exc}")
+    return result
 
 # ---------- import ----------
 

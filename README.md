@@ -23,6 +23,7 @@ Hit **Pick 3 for us** and it deals three restaurants from your rotation — weig
 | `/restaurants` | Your restaurant list — cuisine, price ($–$$$), notes, ★ favorites, visit counts, one-tap "We ate here tonight" |
 | `/history` | Every logged visit (date, total, source), with delete |
 | `/import` | Upload a seed JSON → preview → confirm. Re-imports are safe no-ops. |
+| `/settings` | Gmail deal-scanner setup: address + app password, daily scan time, 🔍 Scan now, last-scan status |
 
 ## Import format
 
@@ -54,16 +55,22 @@ Add them by hand on the `/restaurants` page (🏷️ Deals section at the bottom
 
 **Item-level bonus:** if a deal's item keywords substring-match anything in that restaurant's past receipt items (e.g. keyword `chip` matches an ordered `Chips`), the restaurant gets the extra ×1.25 multiplier.
 
-### Scanning Gmail for promos
+### Automatic deal scanning (Gmail over IMAP)
 
-Your chains send a lot of promos — `scripts/scan_deals.py` turns them into a deals seed:
+The app scans your Gmail for promos itself — no manual imports. Open **/settings** and paste your Gmail address plus an app password; the scanner then runs every morning at your chosen time (default 7:00 AM) and turns concrete offers into deals. There's also a **🔍 Scan now** button on the Settings page.
 
-```bash
-PYTHONPATH=. .venv/bin/python scripts/scan_deals.py          # review what it found
-PYTHONPATH=. .venv/bin/python scripts/scan_deals.py --write  # write seed/deals.seed.json
-```
+**One-time setup:**
+1. Your Google account needs 2-step verification turned on.
+2. Go to `myaccount.google.com/apppasswords` → create an app password (name it "FoodFriday").
+3. Paste the address + app password into Settings → Save.
 
-It searches the last 30 days of promo emails from your chains, keeps only concrete offers (skips brand fluff and merch), and extracts expiry: *"today only"* → that date, *"Valid thru 11/1/2026"* → parsed, *"by Sunday, October 11"* → computed, unclear → 7 days from the email. Expired offers are dropped. The seed it writes is local-only (`seed/` is gitignored) — upload it on the `/import` page like your history seed. **Just ask and I'll re-run the scan any time** — promos expire constantly, so a fresh scan every week or two keeps the deals current.
+The scan is **read-only**: it SELECTs your inbox and fetches with `BODY.PEEK[]`, so nothing is marked read, moved, or deleted. It looks at the last 14 days of emails from your chains' promo senders, keeps only concrete offers (skips brand fluff, merch, and expired promos), and extracts expiry the same way the manual script did — *"today only"* → that date, *"Valid thru 11/1/2026"* → parsed, unclear → 7 days out. Re-runs never create duplicates (dedupe on restaurant + title + valid-until).
+
+If a deal arrives from a chain that **isn't in your restaurant list**, the restaurant is auto-added (marked "auto-added by the deal scanner", $ tier, included in Friday picks) so the weight boost works — toggle it off or delete it if it's not your kind of place.
+
+**About the app password:** it's stored only in this app's own SQLite database, travels over TLS straight to Gmail's IMAP server, and is never shown back to you — the Settings page and API only ever report "set" or blank. There's a **Forget Gmail** button to wipe it entirely.
+
+The old manual route still works if you ever want it: `scripts/scan_deals.py` turns promos into a deals seed you upload on the `/import` page — but with the scanner running, you'll never need to.
 
 ### Parsing receipt items
 
@@ -101,7 +108,7 @@ Or paste-ready: the repo's `docker-compose.yml` is a drop-in Dockge stack. Then 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 PYTHONPATH=. .venv/bin/python -m uvicorn app.main:app --port 4002
-PYTHONPATH=. .venv/bin/python -m pytest -q   # 57 tests
+PYTHONPATH=. .venv/bin/python -m pytest -q   # 70 tests
 ```
 
 ## Screenshots
@@ -110,6 +117,7 @@ PYTHONPATH=. .venv/bin/python -m pytest -q   # 57 tests
 |---|---|
 | ![Pick 3](docs/screenshots/home-picks.png) | ![Restaurants](docs/screenshots/restaurants.png) |
 | ![Mobile](docs/screenshots/mobile-home.png) | ![Deals](docs/screenshots/restaurants-deals.png) |
+| ![Settings](docs/screenshots/settings.png) | |
 
 ## Stack
 

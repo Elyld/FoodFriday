@@ -66,6 +66,22 @@ def seed():
     })
     # one excluded restaurant shows the skip marker
     c.post(f"/api/restaurants/{ids['Dragon Wok']}/in-picks")
+    # fake Gmail config for the settings screenshot (never real creds)
+    c.put("/api/settings", json={
+        "gmail_address": "demo@example.com",
+        "gmail_app_password": "abcd efgh ijkl mnop",
+        "deal_scan_enabled": True,
+        "deal_scan_time": "07:00",
+    })
+    from app.database import SessionLocal
+    from app.models import Setting
+    s = SessionLocal()
+    try:
+        s.merge(Setting(key="deal_scan_last_run", value="2026-10-07T07:00"))
+        s.merge(Setting(key="deal_scan_last_result", value="2 new deals (1 new restaurant added)"))
+        s.commit()
+    finally:
+        s.close()
     return ids
 
 
@@ -126,6 +142,10 @@ def main():
             mob.click("#pick-btn")
             mob.wait_for_timeout(900)
             mob.screenshot(path=str(out / "mobile-home.png"))
+
+            page.goto("http://127.0.0.1:4002/settings", wait_until="networkidle")
+            page.wait_for_timeout(400)
+            page.screenshot(path=str(out / "settings.png"))
 
             browser.close()
         print("shots done:", sorted(p.name for p in out.glob("*.png")))

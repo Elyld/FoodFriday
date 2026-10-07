@@ -158,7 +158,45 @@ async function delDeal(id) {
   catch (e) { toast('Couldn\'t delete deal: ' + e.message); }
 }
 
-// ---- Import ----
+// ---- Settings (deal scanner) ----
+async function saveSettings(e) {
+  e.preventDefault();
+  const body = {
+    gmail_address: document.getElementById('s-address').value.trim() || null,
+    gmail_app_password: document.getElementById('s-password').value || null,
+    deal_scan_enabled: document.getElementById('s-enabled').checked,
+    deal_scan_time: document.getElementById('s-time').value || null,
+  };
+  try {
+    await api('PUT', '/api/settings', body);
+    toast('Settings saved ✓');
+    location.reload();
+  } catch (err) { toast('Couldn\'t save: ' + err.message); }
+  return false;
+}
+
+async function scanNow() {
+  const box = document.getElementById('scan-result');
+  box.innerHTML = '<div class="spinner">🔍 Scanning your promos…</div>';
+  try {
+    const data = await api('POST', '/api/deals/scan');
+    const bits = [escapeHtml(data.summary)];
+    if (data.restaurants_added) bits.push(data.restaurants_added + ' new restaurant(s)');
+    box.innerHTML = '<div class="preview-box"><strong>Scan done:</strong> ' + bits.join(' · ') + '.</div>';
+    toast('Scan complete 🎉');
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Scan failed: ' + escapeHtml(err.message) + '</div>';
+  }
+}
+
+async function clearGmail() {
+  if (!confirm('Forget the stored Gmail address and app password? The scanner will stop.')) return;
+  try {
+    await api('POST', '/api/settings/clear-gmail');
+    location.reload();
+  } catch (err) { toast('Couldn\'t clear: ' + err.message); }
+}
+
 let importPayload = null;
 
 async function previewImport(e) {

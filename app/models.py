@@ -80,3 +80,13 @@ class Deal(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     restaurant: Mapped["Restaurant | None"] = relationship("Restaurant", back_populates="deals")
+
+
+class Setting(Base):
+    """Key-value app settings (Gmail creds for the deal scanner, scan schedule, …)."""
+
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(120), primary_key=True)
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

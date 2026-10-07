@@ -44,6 +44,7 @@ def layout(title: str, body: str, active: str = "") -> str:
     {nav("/restaurants", "Restaurants", "restaurants")}
     {nav("/history", "History", "history")}
     {nav("/import", "Import", "import")}
+    {nav("/settings", "Settings", "settings")}
   </nav>
 </header>
 <main>{body}</main>
@@ -180,7 +181,82 @@ def history_page(visits: list[dict]) -> str:
     return layout("History", body, "history")
 
 
+def settings_page(s: dict) -> str:
+    enabled = "checked" if s["deal_scan_enabled"] else ""
+    last_run = fmt_date(s["deal_scan_last_run"][:10]) if s.get("deal_scan_last_run") else "never"
+    last_result = s.get("deal_scan_last_result") or "—"
+    status = (
+        "✅ configured — scans daily"
+        if s["configured"]
+        else ("⏸️ paused" if s["gmail_app_password_set"] else "⚠️ not configured")
+    )
+    body = f"""
+<h2>Settings</h2>
+<h3>Deal scanner</h3>
+<p style="color:#7a6552">{status}. The scanner reads your promo emails over IMAP
+(read-only — nothing is marked read or deleted) and turns concrete offers into deals.
+A deal from a chain that isn't in your list yet gets its restaurant auto-added
+so the Friday boost works.</p>
+<form class="card-form" id="settings-form" onsubmit="return saveSettings(event)">
+  <div class="field"><label>Gmail address</label>
+    <input id="s-address" maxlength="255" placeholder="you@gmail.com" value="{esc(s["gmail_address"])}"></div>
+  <div class="field"><label>App password</label>
+    <input id="s-password" type="password" maxlength="255" placeholder="{'set — leave blank to keep' if s["gmail_app_password_set"] else 'paste from myaccount.google.com/apppasswords'}" autocomplete="new-password"></div>
+  <div class="form-row">
+    <div class="field"><label>Daily scan time</label>
+      <input id="s-time" type="time" value="{esc(s["deal_scan_time"])}"></div>
+    <div class="field"><label>&nbsp;</label>
+      <label class="check"><input id="s-enabled" type="checkbox" {enabled}> scanning enabled</label></div>
+  </div>
+  <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+    <button class="btn-primary btn-small" type="submit">Save</button>
+    <button class="btn-secondary btn-small" type="button" onclick="scanNow()">🔍 Scan now</button>
+    <button class="btn-danger btn-small" type="button" onclick="clearGmail()">Forget Gmail</button>
+  </div>
+  <p style="color:#7a6552;font-size:.85rem">Last scan: {esc(last_run)} — {esc(last_result)}</p>
+</form>
+<div id="scan-result"></div>
+<p style="color:#7a6552;font-size:.9rem"><strong>One-time setup:</strong> your Google account needs
+2-step verification, then create an app password at
+<code>myaccount.google.com/apppasswords</code> and paste it above. The password is stored only
+in this app's own database, never leaves your server except to log in to Gmail's IMAP,
+and is never shown back to you.</p>
+"""
+    return layout("Settings", body, "settings")
+
+
 def import_page() -> str:
+    body = """
+<h2>Import</h2>
+<p>Bring in restaurants and visits from a JSON file. You'll get a preview before anything is saved, and re-importing the same file won't create duplicates.</p>
+<form class="card-form" id="import-form" onsubmit="return previewImport(event)">
+  <div class="field"><label>Seed JSON file</label><input type="file" id="import-file" accept=".json,application/json" required></div>
+  <button class="btn-primary btn-small" type="submit">Preview import</button>
+</form>
+<div id="import-preview"></div>
+<div class="preview-box">
+  <strong>Format:</strong>
+  <pre style="overflow-x:auto;font-size:.85rem">{
+  "restaurants": [
+    {"name": "Taco Town", "cuisine": "Mexican",
+     "price_tier": 1, "notes": "", "favorite": false}
+  ],
+  "visits": [
+    {"restaurant": "Taco Town",
+     "visited_at": "2026-06-05", "total": 32.50,
+     "source": "import", "external_id": "gmail:abc123",
+     "items": ["Bowl", "Chips"]}
+  ],
+  "deals": [
+    {"restaurant": "Taco Town", "title": "$1.49 Mozz Sticks today",
+     "description": "App-only", "valid_from": "2026-10-07",
+     "valid_until": "2026-10-07", "item_keywords": ["mozz sticks"],
+     "source": "email"}
+  ]
+}</pre>
+</div>
+"""
+    return layout("Import", body, "import")
     body = """
 <h2>Import</h2>
 <p>Bring in restaurants and visits from a JSON file. You'll get a preview before anything is saved, and re-importing the same file won't create duplicates.</p>
