@@ -471,6 +471,10 @@ def test_parse_mcdonalds_total_wont_guess():
     assert parse_mcdonalds_total("no money here") is None
     # but a single agreed amount is fine
     assert parse_mcdonalds_total("Order Total $10.00") == 10.00
+    # mangled single-line table: Total Savings must not kill the real total
+    assert parse_mcdonalds_total(
+        "Discount $4.23 Subtotal $29.00 Total $31.71 Total Savings $4.23"
+    ) == 31.71
 
 
 def test_store_receipts_backfills_missing_totals():

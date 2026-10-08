@@ -171,30 +171,20 @@ def parse_mcdonalds_total(body: str) -> float | None:
         Total $31.71
         Total Savings  $4.23
 
-    The HTML-to-text conversion mangles table layouts unpredictably, so:
-    prefer a bare "Total $X" line; otherwise accept when every total-ish
-    line agrees on one amount. "Subtotal" and "Total Savings" lines are
-    excluded. Never guesses between differing amounts.
+    Matching is per-occurrence, not per-line: the HTML-to-text conversion
+    can mangle table rows onto a single line, so a line-based "savings"
+    exclusion would discard the real total along with "Total Savings".
+    "Subtotal" and "Total Savings" amounts are excluded; returns the amount
+    only when every total-ish occurrence agrees. Never guesses otherwise.
     """
-    bare: float | None = None
     cands: set[float] = set()
-    for line in body.splitlines():
-        if not re.search(r"(?i)(?<!sub)total", line):
-            continue
-        if re.search(r"(?i)savings", line):
-            continue
-        m = re.search(r"\$" + _AMT, line)
-        if not m:
-            continue
+    for m in re.finditer(r"(?i)(?<!sub)total([^\n$]{0,40})\$" + _AMT, body):
+        if re.search(r"(?i)savings", m.group(1)):
+            continue  # "Total Savings $X" is not the order total
         try:
-            amt = float(m.group(1).replace(",", ""))
+            cands.add(float(m.group(2).replace(",", "")))
         except ValueError:
             continue
-        cands.add(amt)
-        if bare is None and re.match(r"\s*total\s*:?\s*\$", line, re.IGNORECASE):
-            bare = amt
-    if bare is not None:
-        return bare
     if len(cands) == 1:
         return next(iter(cands))
     return None
