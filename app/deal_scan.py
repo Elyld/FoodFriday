@@ -110,22 +110,32 @@ def _message_date(msg: email.message.Message) -> date:
 
 
 def _message_body(msg: email.message.Message) -> str:
-    """Plain-text body (first 20k chars), skipping attachments."""
-    chunks: list[str] = []
+    """Readable body text (first 20k chars), skipping attachments.
+
+    Prefers text/plain; falls back to text/html stripped of tags, since most
+    promo emails are HTML-only and otherwise the parser sees just the subject.
+    """
     if msg.is_multipart():
         for part in msg.walk():
-            if part.get_content_type() == "text/plain" and "attachment" not in (
-                part.get("Content-Disposition") or ""
-            ):
-                payload = part.get_payload(decode=True) or b""
-                charset = part.get_content_charset() or "utf-8"
-                chunks.append(payload.decode(charset, errors="replace"))
-                break
-    else:
-        payload = msg.get_payload(decode=True) or b""
-        charset = msg.get_content_charset() or "utf-8"
-        chunks.append(payload.decode(charset, errors="replace"))
-    return "\n".join(chunks)[:20000]
+            if "attachment" in (part.get("Content-Disposition") or ""):
+                continue
+            ctype = part.get_content_type()
+            if ctype not in ("text/plain", "text/html"):
+                continue
+            payload = part.get_payload(decode=True) or b""
+            charset = part.get_content_charset() or "utf-8"
+            text = payload.decode(charset, errors="replace")
+            if ctype == "text/html":
+                text = _html_to_text(text)
+            if text.strip():
+                return text[:20000]
+        return ""
+    payload = msg.get_payload(decode=True) or b""
+    charset = msg.get_content_charset() or "utf-8"
+    text = payload.decode(charset, errors="replace")
+    if msg.get_content_type() == "text/html":
+        text = _html_to_text(text)
+    return text[:20000]
 
 
 def _html_to_text(html: str) -> str:

@@ -493,3 +493,65 @@ def test_reset_stale_running():
         assert get_setting(s, K_STATUS) == "idle"
     finally:
         s.close()
+
+
+def _raw_html(sender: str, subject: str, html: str, sent: str) -> bytes:
+    """HTML-only promo (no text/plain part) — the common real-world case."""
+    msg = email.message.EmailMessage()
+    msg["From"] = sender
+    msg["Subject"] = subject
+    msg["Date"] = sent
+    msg.add_alternative(html, subtype="html")
+    return msg.as_bytes()
+
+
+def test_message_body_falls_back_to_html():
+    from app.deal_scan import _message_body
+
+    raw = _raw_html(
+        "Arby's <arbys@emails.arbys.com>",
+        "Steak Bowl now, FREE Sandwich later",
+        "<html><body><p>Valid thru 11/1/2026.</p>"
+        "<p>Order the steak bowl today and get a <b>free sandwich</b> next visit.</p></body></html>",
+        "Tue, 06 Oct 2026 09:00:00 -0500",
+    )
+    msg = email.message_from_bytes(raw)
+    body = _message_body(msg)
+    assert "Valid thru 11/1/2026" in body
+    assert "free sandwich" in body
+    assert "<p>" not in body  # tags stripped
+
+
+def test_message_body_prefers_plain_text():
+    from app.deal_scan import _message_body
+
+    msg = email.message.EmailMessage()
+    msg["From"] = "x@y.com"
+    msg.set_content("plain version here")
+    msg.add_alternative("<p>html version here</p>", subtype="html")
+    assert _message_body(msg).strip() == "plain version here"
+
+
+def test_html_only_promo_parses_to_deal():
+    from app.deal_scan import _message_body
+    from app.deal_parse import parse_promo
+
+    raw = _raw_html(
+        "Arby's <arbys@emails.arbys.com>",
+        "Steak Bowl now, FREE Sandwich later",
+        "<html><body><p>Valid thru 11/1/2026.</p>"
+        "<p>Order the steak bowl today and get a <b>free sandwich</b> next visit.</p></body></html>",
+        "Tue, 06 Oct 2026 09:00:00 -0500",
+    )
+    msg = email.message_from_bytes(raw)
+    body = _message_body(msg)
+    deal = parse_promo(
+        "Arby's <arbys@emails.arbys.com>",
+        "Steak Bowl now, FREE Sandwich later",
+        body,
+        date(2026, 10, 6),
+        today=TODAY,
+    )
+    assert deal is not None
+    assert deal["valid_until"] == "2026-11-01"
+    assert deal["description"] is not None and "free sandwich" in deal["description"].lower()
