@@ -17,7 +17,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.database import SessionLocal
-from app.deal_scan import K_TIME, get_setting, reset_stale_running, try_start_scan
+from app.deal_scan import K_TIME, get_setting, list_accounts, reset_stale_running, try_start_scan
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +48,7 @@ def schedule_from_settings() -> None:
     try:
         time_raw = (get_setting(session, K_TIME, "07:00") or "07:00").strip()
         enabled = get_setting(session, "deal_scan_enabled", "1") == "1"
-        has_creds = bool(get_setting(session, "gmail_address")) and bool(
-            get_setting(session, "gmail_app_password")
-        )
+        has_creds = len(list_accounts(session)) > 0
     finally:
         session.close()
     if not (enabled and has_creds):

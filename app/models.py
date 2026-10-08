@@ -64,9 +64,29 @@ class Visit(Base):
     items: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )  # newline-separated item names from receipts (for deal item-matching)
+    exclude_from_picks: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )  # per-trip picker opt-out: the visit stays in History + Spending but the
+    # picker ignores it for weighting, 7-day rule, cuisine rotation, and cards
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     restaurant: Mapped["Restaurant"] = relationship("Restaurant", back_populates="visits")
+
+
+class EmailAccount(Base):
+    """A Gmail account the deal/receipt scanner polls over IMAP.
+
+    Replaces the old single-account gmail_address/gmail_app_password settings
+    keys (migrated on startup, see app.deal_scan.migrate_legacy_gmail_settings).
+    """
+
+    __tablename__ = "email_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    label: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    address: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    app_password: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class Deal(Base):

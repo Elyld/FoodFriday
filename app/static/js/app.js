@@ -196,12 +196,10 @@ async function delDeal(id) {
   catch (e) { toast('Couldn\'t delete deal: ' + e.message); }
 }
 
-// ---- Settings (deal scanner) ----
+// ---- Settings (scanner) ----
 async function saveSettings(e) {
   e.preventDefault();
   const body = {
-    gmail_address: document.getElementById('s-address').value.trim() || null,
-    gmail_app_password: document.getElementById('s-password').value || null,
     deal_scan_enabled: document.getElementById('s-enabled').checked,
     deal_scan_time: document.getElementById('s-time').value || null,
     receipt_scan_enabled: document.getElementById('s-receipt-enabled').checked,
@@ -212,6 +210,36 @@ async function saveSettings(e) {
     location.reload();
   } catch (err) { toast('Couldn\'t save: ' + err.message); }
   return false;
+}
+
+async function addAccount() {
+  const label = document.getElementById('a-label').value.trim() || null;
+  const address = document.getElementById('a-address').value.trim();
+  const password = document.getElementById('a-password').value;
+  if (!address || !password) { toast('Address and app password are required'); return; }
+  try {
+    await api('POST', '/api/settings/email-accounts',
+      { label, address, app_password: password });
+    toast('Account added ✓');
+    location.reload();
+  } catch (err) { toast('Couldn\'t add account: ' + err.message); }
+}
+
+async function deleteAccount(id) {
+  if (!confirm('Remove this email account? The scanner will stop checking it.')) return;
+  try {
+    await api('DELETE', '/api/settings/email-accounts/' + id);
+    location.reload();
+  } catch (err) { toast('Couldn\'t remove: ' + err.message); }
+}
+
+async function toggleVisitPicks(id, inPicks) {
+  try {
+    await api('PATCH', '/api/visits/' + id, { exclude_from_picks: !inPicks });
+  } catch (err) {
+    toast('Couldn\'t update: ' + err.message);
+    location.reload();
+  }
 }
 
 async function scanNow() {
@@ -243,13 +271,7 @@ async function scanNow() {
   }
 }
 
-async function clearGmail() {
-  if (!confirm('Forget the stored Gmail address and app password? The scanner will stop.')) return;
-  try {
-    await api('POST', '/api/settings/clear-gmail');
-    location.reload();
-  } catch (err) { toast('Couldn\'t clear: ' + err.message); }
-}
+// (clearGmail removed — email accounts are managed per-account above)
 
 let importPayload = null;
 

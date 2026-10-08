@@ -22,17 +22,18 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.database import init_db, SessionLocal  # noqa: E402
 from app.deal_scan import (  # noqa: E402
     K_ENABLED,
-    K_PASSWORD,
     K_STATUS,
     K_TIME,
     fetch_promos,
+    list_accounts,
+    migrate_legacy_gmail_settings,
     reset_stale_running,
     run_scan,
     scan_enabled,
     set_setting,
     try_start_scan,
 )
-from app.models import Deal, Restaurant  # noqa: E402
+from app.models import Deal, EmailAccount, Restaurant  # noqa: E402
 from app.main import app  # noqa: E402
 from app import scheduler as deal_scheduler  # noqa: E402
 
@@ -166,29 +167,34 @@ def test_fetch_promos_auth_failure_raises():
 # ---------- settings API + masking ----------
 
 def test_settings_password_never_returned():
-    r = client.put("/api/settings", json={
-        "gmail_address": "u@gmail.com",
-        "gmail_app_password": "sekret-123",
+    client.post("/api/settings/clear-gmail")
+    r = client.post("/api/settings/email-accounts", json={
+        "label": "mine", "address": "sekret@gmail.com", "app_password": "sekret-123",
     })
-    assert r.status_code == 200
-    body = r.json()
-    assert body["gmail_address"] == "u@gmail.com"
-    assert body["gmail_app_password_set"] is True
-    assert body["gmail_app_password"] == "********"
-    assert "sekret-123" not in r.text
+    assert r.status_code == 201
+    aid = r.json()["id"]
+    try:
+        body = client.get("/api/settings").json()
+        accts = [a for a in body["email_accounts"] if a["address"] == "sekret@gmail.com"]
+        assert len(accts) == 1
+        assert accts[0]["password_set"] is True
+        assert "sekret-123" not in client.get("/api/settings").text
+        # the page HTML must not contain it either
+        page = client.get("/settings")
+        assert page.status_code == 200
+        assert "sekret-123" not in page.text
+        assert "app password" in page.text.lower()
+    finally:
+        client.delete(f"/api/settings/email-accounts/{aid}")
 
-    # the page HTML must not contain it either
-    page = client.get("/settings")
-    assert page.status_code == 200
-    assert "sekret-123" not in page.text
-    assert "app password" in page.text.lower()
 
-
-def test_settings_password_blank_keeps_old():
-    # blank password on update must not wipe the stored one
+def test_settings_put_does_not_touch_accounts():
+    _enable()
+    before = client.get("/api/settings").json()["email_accounts"]
+    assert len(before) == 1
     r = client.put("/api/settings", json={"deal_scan_time": "08:30"})
     assert r.status_code == 200
-    assert r.json()["gmail_app_password_set"] is True
+    assert r.json()["email_accounts"] == before
     assert r.json()["deal_scan_time"] == "08:30"
 
 
@@ -200,22 +206,23 @@ def test_settings_time_validation():
 
 
 def test_clear_gmail_forgets_creds():
+    _enable()
     r = client.post("/api/settings/clear-gmail")
     assert r.status_code == 200
     body = r.json()
-    assert body["gmail_app_password_set"] is False
-    assert body["gmail_address"] == ""
+    assert body["email_accounts"] == []
     assert body["configured"] is False
 
 
 # ---------- scan: dedupe + auto-create ----------
 
 def _enable():
-    client.put("/api/settings", json={
-        "gmail_address": "u@gmail.com",
-        "gmail_app_password": "pw",
-        "deal_scan_enabled": True,
+    client.post("/api/settings/clear-gmail")
+    r = client.post("/api/settings/email-accounts", json={
+        "label": "mine", "address": "u@gmail.com", "app_password": "pw",
     })
+    assert r.status_code == 201
+    client.put("/api/settings", json={"deal_scan_enabled": True})
 
 
 def _reset_deals():
@@ -299,7 +306,7 @@ def test_scan_twice_is_idempotent(monkeypatch):
     try:
         from app.deal_scan import get_setting
 
-        assert get_setting(s, "deal_scan_last_result") == "no new deals"
+        assert get_setting(s, "deal_scan_last_result") == "no new deals (mine)"
     finally:
         s.close()
 
@@ -329,7 +336,7 @@ def test_scan_without_creds_fails():
     client.post("/api/settings/clear-gmail")
     r = client.post("/api/deals/scan")
     assert r.status_code == 400
-    assert "not configured" in r.json()["detail"].lower()
+    assert "no email accounts" in r.json()["detail"].lower()
 
 
 def test_scan_status_visible_in_settings(monkeypatch):
@@ -555,3 +562,119 @@ def test_html_only_promo_parses_to_deal():
     assert deal is not None
     assert deal["valid_until"] == "2026-11-01"
     assert deal["description"] is not None and "free sandwich" in deal["description"].lower()
+
+
+# ---------- multiple email accounts ----------
+
+def test_add_and_delete_email_account_api():
+    client.post("/api/settings/clear-gmail")
+    try:
+        r = client.post("/api/settings/email-accounts", json={
+            "address": "a@x.com", "app_password": "pw"})
+        assert r.status_code == 201
+        aid = r.json()["id"]
+        assert r.json()["label"] == ""
+        assert r.json()["password_set"] is True
+
+        # duplicate address rejected
+        r2 = client.post("/api/settings/email-accounts", json={
+            "address": "a@x.com", "app_password": "pw"})
+        assert r2.status_code == 409
+
+        # missing password rejected
+        r3 = client.post("/api/settings/email-accounts", json={"address": "b@x.com"})
+        assert r3.status_code in (400, 422)
+
+        body = client.get("/api/settings").json()
+        assert any(a["address"] == "a@x.com" for a in body["email_accounts"])
+        assert body["configured"] is True
+
+        d = client.delete(f"/api/settings/email-accounts/{aid}")
+        assert d.status_code == 204
+        d2 = client.delete(f"/api/settings/email-accounts/{aid}")
+        assert d2.status_code == 404
+        assert client.get("/api/settings").json()["email_accounts"] == []
+    finally:
+        client.post("/api/settings/clear-gmail")
+
+
+def test_migrate_legacy_gmail_settings():
+    from app.deal_scan import get_setting as gs
+
+    s = SessionLocal()
+    try:
+        s.query(EmailAccount).delete()
+        set_setting(s, "gmail_address", "legacy@gmail.com")
+        set_setting(s, "gmail_app_password", "legacy-pw")
+        s.commit()
+    finally:
+        s.close()
+    try:
+        migrate_legacy_gmail_settings()
+        migrate_legacy_gmail_settings()  # second run must be a no-op
+        s = SessionLocal()
+        try:
+            assert gs(s, "gmail_address") is None
+            assert gs(s, "gmail_app_password") is None
+            accts = [a for a in list_accounts(s) if a.address == "legacy@gmail.com"]
+            assert len(accts) == 1
+            assert accts[0].label == "primary"
+        finally:
+            s.close()
+    finally:
+        s = SessionLocal()
+        try:
+            s.query(EmailAccount).delete()
+            s.commit()
+        finally:
+            s.close()
+
+
+def test_scan_two_accounts_bad_one_does_not_block():
+    _reset_deals()
+    client.post("/api/settings/clear-gmail")
+    client.post("/api/settings/email-accounts", json={
+        "label": "mine", "address": "u@gmail.com", "app_password": "pw"})
+    client.post("/api/settings/email-accounts", json={
+        "label": "family", "address": "f@gmail.com", "app_password": "bad-password"})
+    try:
+        logins = []
+
+        class RecordingIMAP(FakeIMAP):
+            def login(self, user, password):
+                logins.append(user)
+                return super().login(user, password)
+
+        s = SessionLocal()
+        try:
+            res = run_scan(s, imap_class=RecordingIMAP, today=TODAY)
+        finally:
+            s.close()
+        assert res["ok"] is False  # one account errored
+        assert "family" in (res["error"] or "")
+        assert res["deals_added"] >= 1  # the good account still delivered
+        assert set(logins) == {"u@gmail.com", "f@gmail.com"}  # both attempted
+        assert res["accounts_scanned"] == 2
+        s = SessionLocal()
+        try:
+            from app.deal_scan import get_setting as gs
+
+            last = gs(s, "deal_scan_last_result") or ""
+            assert "(mine)" in last and "(family)" in last
+        finally:
+            s.close()
+    finally:
+        client.post("/api/settings/clear-gmail")
+
+
+def test_scan_no_accounts_clean_state():
+    client.post("/api/settings/clear-gmail")
+    s = SessionLocal()
+    try:
+        import pytest
+
+        with pytest.raises(RuntimeError, match="No email accounts"):
+            run_scan(s)
+        assert list_accounts(s) == []
+    finally:
+        s.close()

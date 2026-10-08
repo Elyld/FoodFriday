@@ -1,8 +1,12 @@
-"""In-app deal scanner: polls Gmail over IMAP and writes deals to the DB.
+"""In-app deal/receipt scanner: polls Gmail accounts over IMAP, writes to the DB.
 
 Runs on a schedule (APScheduler, see app/scheduler.py) and on demand via
 POST /api/deals/scan. Read-only against the mailbox: it SELECTs INBOX and
 fetches with BODY.PEEK[] so nothing is marked read, and never deletes.
+
+Scans every configured email account (Settings → Email accounts), one IMAP
+session per account; a failing account is recorded and skipped without
+blocking the others.
 
 Dedupes against existing deals on (restaurant_id, title, valid_until).
 If a deal comes from a chain that isn't in the restaurant list, the
@@ -30,15 +34,15 @@ from app.receipt_parse import (
     receipt_sender_domains,
 )
 
-from app.models import Deal, Restaurant, Setting, Visit
+from app.models import Deal, EmailAccount, Restaurant, Setting, Visit
 
 logger = logging.getLogger(__name__)
 
 SCAN_WINDOW_DAYS = 14
 
 # settings keys
-K_ADDRESS = "gmail_address"
-K_PASSWORD = "gmail_app_password"
+K_ADDRESS = "gmail_address"            # LEGACY — migrated to email_accounts on startup
+K_PASSWORD = "gmail_app_password"     # LEGACY — migrated to email_accounts on startup
 K_ENABLED = "deal_scan_enabled"
 K_TIME = "deal_scan_time"          # "HH:MM", 24h, local container time
 K_LAST_RUN = "deal_scan_last_run"      # ISO datetime
@@ -71,8 +75,49 @@ def set_setting(session: Session, key: str, value: str | None) -> None:
         row.updated_at = datetime.utcnow()
 
 
+def list_accounts(session: Session) -> list[EmailAccount]:
+    """All configured scan email accounts, oldest first."""
+    return session.query(EmailAccount).order_by(EmailAccount.id).all()
+
+
+def _account_label(acct: EmailAccount) -> str:
+    return (acct.label or "").strip() or acct.address
+
+
+def migrate_legacy_gmail_settings() -> None:
+    """One-time move of the old single-account settings keys into email_accounts.
+
+    Idempotent: only runs when the legacy keys still exist. Safe to call on
+    every startup.
+    """
+    from app.database import SessionLocal
+
+    session = SessionLocal()
+    try:
+        address = get_setting(session, K_ADDRESS)
+        password = get_setting(session, K_PASSWORD)
+        if not address or not password:
+            return  # nothing to migrate (or already migrated)
+        exists = session.query(EmailAccount).filter(
+            EmailAccount.address == address.strip()
+        ).first()
+        if not exists:
+            session.add(EmailAccount(
+                label="primary",
+                address=address.strip(),
+                app_password=password,
+            ))
+        session.query(Setting).filter(
+            Setting.key.in_([K_ADDRESS, K_PASSWORD])
+        ).delete(synchronize_session=False)
+        session.commit()
+        logger.info("migrated legacy Gmail settings to email_accounts")
+    finally:
+        session.close()
+
+
 def scan_configured(session: Session) -> bool:
-    return bool(get_setting(session, K_ADDRESS)) and bool(get_setting(session, K_PASSWORD))
+    return session.query(EmailAccount).count() > 0
 
 
 def scan_enabled(session: Session) -> bool:
@@ -435,21 +480,12 @@ def store_receipts(session: Session, receipts: list[dict]) -> tuple[int, int]:
     return visits_added, restaurants_added
 
 
-def run_scan(session: Session, imap_class=imaplib.IMAP4_SSL,
-             today: date | None = None) -> dict:
-    """Full scan: deal phase + receipt phase over one IMAP session each.
-
-    Never raises for scan-time failures (bad creds, stalled connection, parse
-    errors): those are recorded into the last-result settings and returned as
-    ``{"ok": False, ...}``. Only a missing Gmail configuration raises.
-
-    `today` is injectable for tests (defaults to the real current date).
-    """
-    address = get_setting(session, K_ADDRESS)
-    password = get_setting(session, K_PASSWORD)
-    if not address or not password:
-        raise RuntimeError("Gmail not configured — add your address and app password in Settings.")
+def _scan_one_account(session: Session, address: str, password: str,
+                      imap_class, today: date | None) -> dict:
+    """Deal + receipt phases for a single account. Never raises for scan-time
+    failures — those come back as error strings in the result dict."""
     errors: list[str] = []
+    deals: list[dict] = []
 
     # --- deal phase ---
     try:
@@ -462,11 +498,10 @@ def run_scan(session: Session, imap_class=imaplib.IMAP4_SSL,
         else:
             deal_summary = "no new deals"
     except Exception as exc:
-        logger.warning("deal scan failed: %s", exc)
+        logger.warning("deal scan failed for %s: %s", address, exc)
         deal_summary = f"error: {exc}"
         errors.append(f"deals: {exc}")
         added, new_restaurants = 0, 0
-        deals = []
 
     # --- receipt phase ---
     if receipt_scan_enabled(session):
@@ -480,7 +515,7 @@ def run_scan(session: Session, imap_class=imaplib.IMAP4_SSL,
             else:
                 receipt_summary = "no new receipts"
         except Exception as exc:
-            logger.warning("receipt scan failed: %s", exc)
+            logger.warning("receipt scan failed for %s: %s", address, exc)
             receipt_summary = f"error: {exc}"
             errors.append(f"receipts: {exc}")
             v_added, r_added = 0, 0
@@ -488,6 +523,56 @@ def run_scan(session: Session, imap_class=imaplib.IMAP4_SSL,
         receipt_summary = "receipt scanning disabled"
         v_added, r_added = 0, 0
 
+    return {
+        "ok": not errors,
+        "error": "; ".join(errors) if errors else None,
+        "deals_found": len(deals),
+        "deals_added": added,
+        "restaurants_added": new_restaurants,
+        "deal_summary": deal_summary,
+        "visits_added": v_added,
+        "receipt_restaurants_added": r_added,
+        "receipt_summary": receipt_summary,
+    }
+
+
+def run_scan(session: Session, imap_class=imaplib.IMAP4_SSL,
+             today: date | None = None) -> dict:
+    """Full scan across ALL configured email accounts.
+
+    One IMAP session per account; a failing account is recorded and skipped —
+    it never blocks the others. Never raises for scan-time failures (bad
+    creds, stalled connection, parse errors): those are recorded into the
+    last-result settings and returned as ``{"ok": False, ...}``. Only a missing
+    email configuration raises.
+
+    `today` is injectable for tests (defaults to the real current date).
+    """
+    accounts = list_accounts(session)
+    if not accounts:
+        raise RuntimeError("No email accounts configured — add one in Settings.")
+
+    deal_parts: list[str] = []
+    receipt_parts: list[str] = []
+    totals = {
+        "deals_found": 0, "deals_added": 0, "restaurants_added": 0,
+        "visits_added": 0, "receipt_restaurants_added": 0,
+    }
+    errors: list[str] = []
+
+    for acct in accounts:
+        label = _account_label(acct)
+        res = _scan_one_account(session, acct.address, acct.app_password,
+                                imap_class, today)
+        deal_parts.append(f"{res['deal_summary']} ({label})")
+        receipt_parts.append(f"{res['receipt_summary']} ({label})")
+        for key in totals:
+            totals[key] += res[key]
+        if res["error"]:
+            errors.append(f"{label}: {res['error']}")
+
+    deal_summary = "; ".join(deal_parts)
+    receipt_summary = "; ".join(receipt_parts)
     now = datetime.now().isoformat(timespec="minutes")
     set_setting(session, K_STATUS, "error" if errors else "done")
     set_setting(session, K_LAST_RUN, now)
@@ -498,13 +583,14 @@ def run_scan(session: Session, imap_class=imaplib.IMAP4_SSL,
     return {
         "ok": not errors,
         "error": "; ".join(errors) if errors else None,
-        "deals_found": len(deals),
-        "deals_added": added,
-        "restaurants_added": new_restaurants,
+        "deals_found": totals["deals_found"],
+        "deals_added": totals["deals_added"],
+        "restaurants_added": totals["restaurants_added"],
         "summary": deal_summary,
-        "visits_added": v_added,
-        "receipt_restaurants_added": r_added,
+        "visits_added": totals["visits_added"],
+        "receipt_restaurants_added": totals["receipt_restaurants_added"],
         "receipt_summary": receipt_summary,
+        "accounts_scanned": len(accounts),
     }
 
 
@@ -546,7 +632,7 @@ def try_start_scan(session_factory, imap_class=None) -> bool:
         try:
             if not scan_configured(session):
                 raise RuntimeError(
-                    "Gmail not configured — add your address and app password in Settings."
+                    "No email accounts configured — add one in Settings."
                 )
             if get_setting(session, K_STATUS) == "running":
                 return False

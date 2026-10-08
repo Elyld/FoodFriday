@@ -41,6 +41,14 @@ def init_db() -> None:
             conn.exec_driver_sql("PRAGMA journal_mode=WAL")
             conn.exec_driver_sql("PRAGMA foreign_keys=ON")
     _apply_column_migrations()
+    _migrate_legacy_email_settings()
+
+
+def _migrate_legacy_email_settings() -> None:
+    """Move the old single-account Gmail settings keys into email_accounts."""
+    from app.deal_scan import migrate_legacy_gmail_settings
+
+    migrate_legacy_gmail_settings()
 
 
 def _apply_column_migrations() -> None:

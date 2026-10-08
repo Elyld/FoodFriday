@@ -22,18 +22,17 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.database import init_db, SessionLocal  # noqa: E402
 from app.deal_scan import (  # noqa: E402
-    K_ADDRESS,
-    K_PASSWORD,
     K_R_ENABLED,
     K_R_LAST_RESULT,
     fetch_receipts,
     get_setting,
+    list_accounts,
     receipt_scan_enabled,
     run_scan,
     set_setting,
     store_receipts,
 )
-from app.models import Restaurant, Visit  # noqa: E402
+from app.models import EmailAccount, Restaurant, Visit  # noqa: E402
 from app.receipt_parse import detect_receipt, parse_receipt  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -147,8 +146,8 @@ def _imap():
 
 def _session_with_creds():
     s = SessionLocal()
-    set_setting(s, K_ADDRESS, "u@gmail.com")
-    set_setting(s, K_PASSWORD, "pw")
+    s.query(EmailAccount).delete()
+    s.add(EmailAccount(label="mine", address="u@gmail.com", app_password="pw"))
     set_setting(s, K_R_ENABLED, "1")
     s.commit()
     return s
@@ -287,7 +286,7 @@ def test_run_scan_dedupe_second_run_is_noop():
         s.close()
     assert first["visits_added"] >= 0
     assert second["visits_added"] == 0
-    assert second["receipt_summary"] == "no new receipts"
+    assert second["receipt_summary"] == "no new receipts (mine)"
 
 
 def test_track_visits_false_skips_restaurant():
@@ -332,14 +331,14 @@ def test_receipt_scan_disabled_skips_phase():
         s.close()
     assert result["ok"] is True
     assert result["visits_added"] == 0
-    assert result["receipt_summary"] == "receipt scanning disabled"
+    assert result["receipt_summary"] == "receipt scanning disabled (mine)"
 
 
 def test_receipt_scan_enabled_flag():
     s = SessionLocal()
     try:
-        set_setting(s, K_ADDRESS, "u@gmail.com")
-        set_setting(s, K_PASSWORD, "pw")
+        s.query(EmailAccount).delete()
+        s.add(EmailAccount(label="mine", address="u@gmail.com", app_password="pw"))
         set_setting(s, K_R_ENABLED, "1")
         s.commit()
         assert receipt_scan_enabled(s) is True

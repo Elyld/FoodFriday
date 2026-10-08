@@ -25,7 +25,7 @@ from app.discover import (
     discover as discover_nearby,
     norm_name as discover_norm,
 )
-from app.models import Deal, Restaurant, Setting, Visit
+from app.models import Deal, EmailAccount, Restaurant, Setting, Visit
 from app.nudge import (
     K_NUDGE_ENABLED,
     K_NUDGE_LAST_RESULT,
@@ -36,19 +36,18 @@ from app.nudge import (
 from app.version import APP_NAME, VERSION
 from app import scheduler as deal_scheduler
 from app.deal_scan import (
-    K_ADDRESS,
     K_ENABLED,
     K_LAST_RESULT,
     K_LAST_RUN,
-    K_PASSWORD,
     K_R_ENABLED,
     K_R_LAST_RESULT,
     K_R_LAST_RUN,
     K_STATUS,
     K_TIME,
     get_setting,
-    set_setting,
+    list_accounts,
     scan_enabled,
+    set_setting,
     try_start_scan,
 )
 
@@ -93,16 +92,25 @@ def restaurant_dict(r: Restaurant, visit_count: int, last_visit: date | None) ->
     }
 
 
-def visit_stats(session: Session) -> tuple[dict[int, int], dict[int, date]]:
+def visit_stats(session: Session, counted_only: bool = False) -> tuple[dict[int, int], dict[int, date]]:
+    """Per-restaurant visit counts and last-visit dates.
+
+    counted_only=True restricts to visits that count toward the Friday picks
+    (Visit.exclude_from_picks is not True) — the picker uses this; the
+    restaurant list and spending dashboard use all visits.
+    """
+    q = session.query(Visit)
+    if counted_only:
+        q = q.filter(Visit.exclude_from_picks.isnot(True))
     counts = {
         row[0]: row[1]
-        for row in session.query(Visit.restaurant_id, func.count(Visit.id))
+        for row in q.with_entities(Visit.restaurant_id, func.count(Visit.id))
         .group_by(Visit.restaurant_id)
         .all()
     }
     lasts = {
         row[0]: row[1]
-        for row in session.query(Visit.restaurant_id, func.max(Visit.visited_at))
+        for row in q.with_entities(Visit.restaurant_id, func.max(Visit.visited_at))
         .group_by(Visit.restaurant_id)
         .all()
     }
@@ -138,6 +146,7 @@ def history_page(session: Session = Depends(get_session)):
             "restaurant_name": v.restaurant.name if v.restaurant else "?",
             "total": v.total,
             "source": v.source,
+            "exclude_from_picks": v.exclude_from_picks is True,
         }
         for v in visits
     ]
@@ -294,6 +303,7 @@ def list_visits(session: Session = Depends(get_session)):
             "visited_at": v.visited_at.isoformat(),
             "total": v.total,
             "source": v.source,
+            "exclude_from_picks": v.exclude_from_picks is True,
         }
         for v in visits
     ]
@@ -326,6 +336,28 @@ def delete_visit(vid: int, session: Session = Depends(get_session)):
     return None
 
 
+class VisitPatchIn(BaseModel):
+    # None = toggle the current value
+    exclude_from_picks: bool | None = None
+
+
+@app.patch("/api/visits/{vid}")
+def patch_visit(vid: int, payload: VisitPatchIn, session: Session = Depends(get_session)):
+    """Toggle (or set) whether a visit counts toward the Friday picks.
+
+    Picker-only: the visit stays in History and Spending either way.
+    """
+    v = session.get(Visit, vid)
+    if not v:
+        raise HTTPException(404, "Visit not found")
+    if payload.exclude_from_picks is None:
+        v.exclude_from_picks = not (v.exclude_from_picks is True)
+    else:
+        v.exclude_from_picks = payload.exclude_from_picks
+    session.commit()
+    return {"id": v.id, "exclude_from_picks": v.exclude_from_picks is True}
+
+
 class PickIn(BaseModel):
     keep_ids: list[int] = []
     veto_ids: list[int] = []
@@ -342,8 +374,13 @@ def build_pick_response(session: Session, mode: str = "friday",
     mode="new": only restaurants with zero visits ("somewhere new").
     Otherwise the normal weighted Friday draw, optionally excluding the
     cuisine of the most recent logged visit (avoid_repeat_cuisine setting).
+
+    All picker inputs (visit counts, last-visit dates, deal item matching,
+    cuisine rotation) consider only visits that count toward picks —
+    Visit.exclude_from_picks rows are ignored here (they still show in
+    History and Spending).
     """
-    counts, lasts = visit_stats(session)
+    counts, lasts = visit_stats(session, counted_only=True)
     restaurants = session.query(Restaurant).all()
     today = date.today()
 
@@ -391,11 +428,13 @@ def build_pick_response(session: Session, mode: str = "friday",
         if r.include_in_picks is not False
     ]
 
-    # Cuisine rotation: skip the cuisine of the most recent logged visit.
+    # Cuisine rotation: skip the cuisine of the most recent COUNTED visit
+    # (excluded trips — kid's runs, breakfast pitstops — don't set the rotation).
     skipped_cuisine: str | None = None
     if get_setting(session, K_AVOID_REPEAT_CUISINE, "1") == "1" and not include_cuisine:
         latest = (
             session.query(Visit)
+            .filter(Visit.exclude_from_picks.isnot(True))
             .order_by(Visit.visited_at.desc(), Visit.id.desc())
             .first()
         )
@@ -419,7 +458,11 @@ def build_pick_response(session: Session, mode: str = "friday",
             deals_by_id.setdefault(d.restaurant_id, []).append(dd)
 
     items_by_id: dict[int, list[str]] = {}
-    for v in session.query(Visit).filter(Visit.items.isnot(None)).all():
+    for v in (
+        session.query(Visit)
+        .filter(Visit.items.isnot(None), Visit.exclude_from_picks.isnot(True))
+        .all()
+    ):
         items_by_id.setdefault(v.restaurant_id, []).extend(
             [i.strip() for i in (v.items or "").splitlines() if i.strip()]
         )
@@ -575,13 +618,19 @@ def delete_deal(did: int, session: Session = Depends(get_session)):
 
 def settings_view(session: Session) -> dict:
     """Settings for display/API — secrets are never returned."""
-    pw = get_setting(session, K_PASSWORD)
     yelp_key = get_setting(session, K_YELP_KEY)
     webhook = get_setting(session, K_WEBHOOK)
+    accounts = [
+        {
+            "id": a.id,
+            "label": a.label or "",
+            "address": a.address,
+            "password_set": True,
+        }
+        for a in list_accounts(session)
+    ]
     return {
-        "gmail_address": get_setting(session, K_ADDRESS) or "",
-        "gmail_app_password_set": bool(pw),
-        "gmail_app_password": MASKED if pw else "",
+        "email_accounts": accounts,
         "deal_scan_enabled": get_setting(session, K_ENABLED, "1") == "1",
         "deal_scan_time": get_setting(session, K_TIME, "07:00") or "07:00",
         "deal_scan_last_run": get_setting(session, K_LAST_RUN),
@@ -608,8 +657,6 @@ def settings_view(session: Session) -> dict:
 
 
 class SettingsIn(BaseModel):
-    gmail_address: str | None = None
-    gmail_app_password: str | None = None  # write-only; ignored when empty/masked
     deal_scan_enabled: bool | None = None
     deal_scan_time: str | None = None  # "HH:MM"
     receipt_scan_enabled: bool | None = None
@@ -641,10 +688,6 @@ def get_settings(session: Session = Depends(get_session)):
 
 @app.put("/api/settings")
 def update_settings(payload: SettingsIn, session: Session = Depends(get_session)):
-    if payload.gmail_address is not None:
-        set_setting(session, K_ADDRESS, payload.gmail_address.strip() or None)
-    if payload.gmail_app_password and payload.gmail_app_password != MASKED:
-        set_setting(session, K_PASSWORD, payload.gmail_app_password.strip() or None)
     if payload.deal_scan_enabled is not None:
         set_setting(session, K_ENABLED, "1" if payload.deal_scan_enabled else "0")
     if payload.deal_scan_time is not None:
@@ -678,12 +721,50 @@ def update_settings(payload: SettingsIn, session: Session = Depends(get_session)
 
 @app.post("/api/settings/clear-gmail")
 def clear_gmail(session: Session = Depends(get_session)):
-    """Forget the stored Gmail credentials entirely."""
-    set_setting(session, K_ADDRESS, None)
-    set_setting(session, K_PASSWORD, None)
+    """Forget all stored email accounts. The scanner stops until one is added."""
+    session.query(EmailAccount).delete()
     session.commit()
     deal_scheduler.schedule_from_settings()
     return settings_view(session)
+
+
+class EmailAccountIn(BaseModel):
+    label: str | None = None
+    address: str
+    app_password: str  # write-only
+
+
+@app.post("/api/settings/email-accounts", status_code=201)
+def add_email_account(payload: EmailAccountIn, session: Session = Depends(get_session)):
+    """Add a Gmail account for the deal/receipt scanner (app password per account)."""
+    address = (payload.address or "").strip()
+    password = (payload.app_password or "").strip()
+    if not address or not password:
+        raise HTTPException(400, "address and app password are required")
+    if session.query(EmailAccount).filter(EmailAccount.address == address).first():
+        raise HTTPException(409, "that address is already added")
+    acct = EmailAccount(
+        label=(payload.label or "").strip() or None,
+        address=address,
+        app_password=password,
+    )
+    session.add(acct)
+    session.commit()
+    session.refresh(acct)
+    deal_scheduler.schedule_from_settings()
+    return {"id": acct.id, "label": acct.label or "", "address": acct.address,
+            "password_set": True}
+
+
+@app.delete("/api/settings/email-accounts/{aid}", status_code=204)
+def delete_email_account(aid: int, session: Session = Depends(get_session)):
+    acct = session.get(EmailAccount, aid)
+    if not acct:
+        raise HTTPException(404, "Email account not found")
+    session.delete(acct)
+    session.commit()
+    deal_scheduler.schedule_from_settings()
+    return None
 
 
 @app.post("/api/settings/clear-integrations")

@@ -16,6 +16,7 @@ Hit **Pick 3 for us** and it deals three restaurants from your rotation — weig
 - Each card carries a one-line reason: *"New — never logged"*, *"Haven't been since Jun 2026"*, *"A favorite"*, …
 - **✨ Somewhere new mode**: flip the toggle on the home page and the picker draws only from restaurants with zero logged visits — same 3-card UI, tap-to-log, reroll, veto. A stored Yelp rating gives a gentle tiebreak boost. Empty state points you at Discover.
 - **Cuisine rotation**: by default the picker skips the cuisine of your most recent visit (*"skipping Mexican — last week's pick"*), with an "include it anyway" override. Toggle it in Settings → Picker.
+- **Per-trip opt-out**: on the `/history` page every visit has an **"in picks"** checkbox. Uncheck a trip (kid's solo McDonald's run, breakfast pitstop, …) and the picker pretends it never happened for weighting, the 7-day rule, cuisine rotation, deal item matching, and "last visit" lines — a restaurant with *all* trips unchecked is treated as never-visited. The trip stays in History and **still counts in Spending** (money spent is money spent).
 
 ## Pages
 
@@ -25,9 +26,9 @@ Hit **Pick 3 for us** and it deals three restaurants from your rotation — weig
 | `/restaurants` | Your restaurant list — cuisine, price ($–$$$), notes, ★ favorites, visit counts, one-tap "We ate here tonight" |
 | `/discover` | 🧭 Nearby restaurants from Yelp (ratings, distance, price) — one-tap add to your list |
 | `/spending` | 💰 Spending dashboard: all-time + average, last 6 months, top restaurants, by cuisine |
-| `/history` | Every logged visit (date, total, source), with delete |
+| `/history` | Every logged visit (date, total, source), with delete + per-trip "in picks" checkbox |
 | `/import` | Upload a seed JSON → preview → confirm. Re-imports are safe no-ops. |
-| `/settings` | Gmail deal-scanner, Yelp/Discover, Discord Friday nudge, picker options |
+| `/settings` | Email accounts for the deal/receipt scanner, Yelp/Discover, Discord Friday nudge, picker options |
 
 ## Import format
 
@@ -61,14 +62,16 @@ Add them by hand on the `/restaurants` page (🏷️ Deals section at the bottom
 
 ### Automatic deal + receipt scanning (Gmail over IMAP)
 
-The app scans your Gmail itself — no manual imports. Open **/settings** and paste your Gmail address plus an app password; the scanner then runs every morning at your chosen time (default 7:00 AM) in **two phases**: promos become deals, and order receipts become visits in your history. There's also a **🔍 Scan now** button on the Settings page. Each phase has its own enable toggle and its own result line ("deals: … · receipts: …").
+The app scans your Gmail itself — no manual imports. Open **/settings** and add each Gmail account you want scanned (label optional, address, app password); the scanner then runs every morning at your chosen time (default 7:00 AM) in **two phases**: promos become deals, and order receipts become visits in your history. There's also a **🔍 Scan now** button on the Settings page. Each phase has its own enable toggle and its own result line ("deals: … · receipts: …").
 
 **Scans run in the background:** hitting Scan now returns instantly and the scan works through your mail behind the scenes — a first run over ~30 senders × 14 days of mail normally takes **1–3 minutes**. The Settings page shows a "🔄 Scan running…" notice while it's going, and the result lines appear when it lands. If the button seems to do nothing, give it a couple of minutes and refresh. Overlapping scans are blocked: a second Scan now (or the daily job firing mid-scan) just stands down.
 
-**One-time setup:**
-1. Your Google account needs 2-step verification turned on.
+**One-time setup per account:**
+1. That Google account needs 2-step verification turned on.
 2. Go to `myaccount.google.com/apppasswords` → create an app password (name it "FoodFriday").
-3. Paste the address + app password into Settings → Save.
+3. Settings → Add an account → paste the address + app password → Add account.
+
+Each account gets its own IMAP session; if one account's password goes stale, its failure is recorded in the result line and the other accounts still scan. Upgrading from the old single-account setup is automatic — the old address/password move into the accounts list as "primary" on first startup.
 
 The scan is **read-only**: it SELECTs your inbox and fetches with `BODY.PEEK[]`, so nothing is marked read, moved, or deleted. Deals: it looks at the last 14 days of emails from your chains' promo senders, keeps only concrete offers (skips brand fluff, merch, and expired promos), and extracts expiry the same way the manual script did — *"today only"* → that date, *"Valid thru 11/1/2026"* → parsed, unclear → 7 days out. Re-runs never create duplicates (dedupe on restaurant + title + valid-until).
 
@@ -76,7 +79,7 @@ The scan is **read-only**: it SELECTs your inbox and fetches with `BODY.PEEK[]`,
 
 **Skip list:** every restaurant row has a 🧾 tracking toggle. Flip it to 📵 and the receipt scanner skips that place entirely — no visits, no auto-anything. (If you ever re-add McDonald's for the kid's Friday runs, this is the switch.)
 
-**About the app password:** it's stored only in this app's own SQLite database, travels over TLS straight to Gmail's IMAP server, and is never shown back to you — the Settings page and API only ever report "set" or blank. There's a **Forget Gmail** button to wipe it entirely.
+**About the app passwords:** each is stored only in this app's own SQLite database, travels over TLS straight to Gmail's IMAP server, and is never shown back to you — the Settings page and API only ever report "set" or blank. Remove an account any time with its **Remove** button.
 
 The old manual route still works if you ever want it: `scripts/scan_deals.py` turns promos into a deals seed you upload on the `/import` page — but with the scanner running, you'll never need to.
 
@@ -150,7 +153,8 @@ PYTHONPATH=. .venv/bin/python -m pytest -q   # 105 tests
 | ![Pick 3](docs/screenshots/home-picks.png) | ![Somewhere new](docs/screenshots/home-new-mode.png) |
 | ![Restaurants](docs/screenshots/restaurants.png) | ![Deals](docs/screenshots/restaurants-deals.png) |
 | ![Discover](docs/screenshots/discover.png) | ![Spending](docs/screenshots/spending.png) |
-| ![Settings](docs/screenshots/settings.png) | ![Mobile](docs/screenshots/mobile-home.png) |
+| ![Mobile](docs/screenshots/mobile-home.png) | ![Email accounts](docs/screenshots/settings-accounts.png) |
+| ![History checkmarks](docs/screenshots/history-checkmarks.png) | |
 
 ## Stack
 

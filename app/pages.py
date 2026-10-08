@@ -184,14 +184,16 @@ def history_page(visits: list[dict]) -> str:
         trs = []
         for v in visits:
             total = f"${v['total']:.2f}" if v["total"] is not None else "—"
+            in_picks = "" if v.get("exclude_from_picks") else "checked"
             trs.append(f"""<tr>
 <td data-label="Date">{fmt_date(v["visited_at"])}</td>
 <td data-label="Restaurant"><strong>{esc(v["restaurant_name"])}</strong></td>
 <td data-label="Total">{total}</td>
 <td data-label="Source">{esc(v["source"] or "manual")}</td>
+<td data-label="In picks"><label class="check pick-check"><input type="checkbox" {in_picks} onchange="toggleVisitPicks({v["id"]}, this.checked)" title="Uncheck to keep this trip out of Friday picks"> <span>in picks</span></label></td>
 <td data-label=""><button class="btn-danger btn-small" onclick="delVisit({v["id"]})">Delete</button></td>
 </tr>""")
-        body = "<h2>History</h2><table class='grid'><thead><tr><th>Date</th><th>Restaurant</th><th>Total</th><th>Source</th><th></th></tr></thead><tbody>" + "".join(trs) + "</tbody></table>"
+        body = "<h2>History</h2><p style=\"color:#7a6552;font-size:.9rem\">Uncheck “in picks” on a trip to keep it out of Friday's picker (kid's solo runs, breakfast pitstops…). It stays in your history and spending totals either way.</p><table class='grid'><thead><tr><th>Date</th><th>Restaurant</th><th>Total</th><th>Source</th><th>In picks</th><th></th></tr></thead><tbody>" + "".join(trs) + "</tbody></table>"
     return layout("History", body, "history")
 
 
@@ -287,10 +289,11 @@ def settings_page(s: dict) -> str:
     r_last_run = fmt_date(s["receipt_scan_last_run"][:10]) if s.get("receipt_scan_last_run") else "never"
     r_last_result = s.get("receipt_scan_last_result") or "—"
     scan_status = s.get("deal_scan_status") or "idle"
+    accounts = s.get("email_accounts") or []
     status = (
         "✅ configured — scans daily"
         if s["configured"]
-        else ("⏸️ paused" if s["gmail_app_password_set"] else "⚠️ not configured")
+        else "⚠️ not configured"
     )
     scan_line = (
         "<p style=\"color:#7a6552;font-size:.85rem\">🔄 <strong>Scan running…</strong> "
@@ -301,19 +304,40 @@ def settings_page(s: dict) -> str:
             f"deals: {esc(last_result)} · receipts: {esc(r_last_result)}</p>"
         )
     )
+    if accounts:
+        acct_rows = "".join(
+            f"""<div class="acct-row"><span class="acct-label">{esc(a["label"] or "—")}</span>
+<span class="acct-addr">{esc(a["address"])}</span>
+<span class="acct-set">password set</span>
+<button class="btn-danger btn-small" type="button" onclick="deleteAccount({a["id"]})">Remove</button></div>"""
+            for a in accounts
+        )
+    else:
+        acct_rows = '<div class="empty">No email accounts yet — add one below.</div>'
     body = f"""
 <h2>Settings</h2>
-<h3>Deal scanner</h3>
-<p style="color:#7a6552">{status}. The scanner reads your mail over IMAP
+<h3>📧 Scan email accounts</h3>
+<p style="color:#7a6552">{status}. The scanner reads each account's mail over IMAP
 (read-only — nothing is marked read or deleted): promo emails become deals,
 and order receipts become visits in your history. A deal or receipt from a
 chain that isn't in your list yet gets its restaurant auto-added
 so the Friday boost works.</p>
-<form class="card-form" id="settings-form" onsubmit="return saveSettings(event)">
-  <div class="field"><label>Gmail address</label>
-    <input id="s-address" maxlength="255" placeholder="you@gmail.com" value="{esc(s["gmail_address"])}"></div>
+<div class="card-form">
+  {acct_rows}
+  <h4 style="margin:.8rem 0 .4rem">Add an account</h4>
+  <div class="form-row">
+    <div class="field"><label>Label (optional)</label>
+      <input id="a-label" maxlength="120" placeholder="mine, family…"></div>
+    <div class="field"><label>Gmail address</label>
+      <input id="a-address" maxlength="255" placeholder="you@gmail.com"></div>
+  </div>
   <div class="field"><label>App password</label>
-    <input id="s-password" type="password" maxlength="255" placeholder="{'set — leave blank to keep' if s["gmail_app_password_set"] else 'paste from myaccount.google.com/apppasswords'}" autocomplete="new-password"></div>
+    <input id="a-password" type="password" maxlength="255" placeholder="paste from myaccount.google.com/apppasswords" autocomplete="new-password"></div>
+  <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+    <button class="btn-primary btn-small" type="button" onclick="addAccount()">Add account</button>
+  </div>
+</div>
+<form class="card-form" id="settings-form" onsubmit="return saveSettings(event)">
   <div class="form-row">
     <div class="field"><label>Daily scan time</label>
       <input id="s-time" type="time" value="{esc(s["deal_scan_time"])}"></div>
@@ -324,14 +348,13 @@ so the Friday boost works.</p>
   <div style="display:flex;gap:.6rem;flex-wrap:wrap">
     <button class="btn-primary btn-small" type="submit">Save</button>
     <button class="btn-secondary btn-small" type="button" onclick="scanNow()">🔍 Scan now</button>
-    <button class="btn-danger btn-small" type="button" onclick="clearGmail()">Forget Gmail</button>
   </div>
   {scan_line}
 </form>
 <div id="scan-result"></div>
-<p style="color:#7a6552;font-size:.9rem"><strong>One-time setup:</strong> your Google account needs
+<p style="color:#7a6552;font-size:.9rem"><strong>One-time setup per account:</strong> the Google account needs
 2-step verification, then create an app password at
-<code>myaccount.google.com/apppasswords</code> and paste it above. The password is stored only
+<code>myaccount.google.com/apppasswords</code> and paste it above. Each password is stored only
 in this app's own database, never leaves your server except to log in to Gmail's IMAP,
 and is never shown back to you.</p>
 <h3>🧭 Discover (Yelp)</h3>

@@ -201,3 +201,13 @@ form.card-form h3 { margin-top: 0; }
 .bar-track { flex: 1; background: var(--cream-dark); border-radius: 999px; height: 1.1rem; overflow: hidden; }
 .bar-fill { display: block; height: 100%; background: linear-gradient(90deg, var(--paprika), #d98a4b); border-radius: 999px; }
 .bar-val { width: 5.5rem; text-align: right; font-weight: 700; font-size: 0.9rem; flex-shrink: 0; }
+
+/* scan email accounts */
+.acct-row { display: flex; align-items: center; gap: .8rem; padding: .5rem 0;
+  border-bottom: 1px dashed #e5d9c5; flex-wrap: wrap; }
+.acct-label { font-weight: 600; min-width: 4rem; }
+.acct-addr { color: #7a6552; flex: 1; }
+.acct-set { font-size: .8rem; color: #7a6552; background: #f3ecdf;
+  border-radius: 8px; padding: .15rem .6rem; }
+.pick-check { display: inline-flex; align-items: center; gap: .35rem;
+  font-size: .85rem; color: #7a6552; white-space: nowrap; }
