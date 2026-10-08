@@ -175,6 +175,7 @@ def test_detect_receipt_known_chains():
     assert detect_receipt("x@pizzahut.com", "Thank you for your Pizza Hut order")["name"] == "Pizza Hut"
     assert detect_receipt("McDonald's <donotreply@mcdonalds.com>", "Your McDonald's receipt")["name"] == "McDonald's"
     assert detect_receipt("x@emails.mcdonalds.com", "Thanks for your order!")["name"] == "McDonald's"
+    assert detect_receipt("McDonald's <DoNotReply_US@us.mcdonalds.com>", "Thanks for placing a mobile order!")["name"] == "McDonald's"
     assert detect_receipt("Schlotzsky's <orders@schlotzskys.com>", "Your Schlotzsky's order confirmation")["name"] == "Schlotzsky's"
     assert detect_receipt("Church's Chicken <noreply@churchschicken.com>", "Your Church's order receipt")["name"] == "Church's Chicken"
 

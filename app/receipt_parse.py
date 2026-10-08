@@ -289,8 +289,8 @@ RECEIPT_CHAINS: list[dict] = [
     {
         "name": "McDonald's",
         "sender": ("mcdonalds",),
-        "subject": ("receipt", "thanks for your order", "order confirmation",
-                    "your mcdonald"),
+        "subject": ("receipt", "thanks for your order", "thanks for placing",
+                    "order confirmation", "your mcdonald", "mobile order"),
         "total": [r"(?<!sub)total\s*:?\s*\$" + _AMT],
         "items": None,
     },
