@@ -286,6 +286,14 @@ RECEIPT_CHAINS: list[dict] = [
         "total": [r"Order Total:\s*\$" + _AMT],
         "items": None,
     },
+    {
+        "name": "McDonald's",
+        "sender": ("mcdonalds", "mcdonald's"),
+        "subject": ("receipt", "thanks for your order", "order confirmation",
+                    "your mcdonald"),
+        "total": [r"(?<!sub)total\s*:?\s*\$" + _AMT],
+        "items": None,
+    },
     # delivery aggregators — generic total fallback only
     {
         "name": "DoorDash",

@@ -173,6 +173,8 @@ def test_detect_receipt_known_chains():
     assert detect_receipt("x@dairyqueen.com", "DQ Order Confirmation")["name"] == "Dairy Queen"
     assert detect_receipt("x@raisingcanes.com", "Raising Cane's Order Received")["name"] == "Raising Cane's"
     assert detect_receipt("x@pizzahut.com", "Thank you for your Pizza Hut order")["name"] == "Pizza Hut"
+    assert detect_receipt("McDonald's <donotreply@mcdonalds.com>", "Your McDonald's receipt")["name"] == "McDonald's"
+    assert detect_receipt("x@emails.mcdonalds.com", "Thanks for your order!")["name"] == "McDonald's"
 
 
 def test_detect_receipt_rejects_promos_and_unrelated():
@@ -204,6 +206,8 @@ def test_parse_receipt_totals():
     assert total("d@dairyqueen.com", "Order Confirmation", "| TOTAL | $17.14 |") == 17.14
     assert total("r@raisingcanes.com", "Order Received", "| TOTAL | $26.83 |") == 26.83
     assert total("p@pizzahut.com", "Thank you for your Pizza Hut order", "Order Total: $65.33") == 65.33
+    assert total("m@mcdonalds.com", "Your McDonald's receipt", "Subtotal $10.99\nTotal: $11.83") == 11.83
+    assert total("m@mcdonalds.com", "Thanks for your order!", "Total $8.49") == 8.49
 
 
 def test_parse_receipt_no_total_gives_none():
