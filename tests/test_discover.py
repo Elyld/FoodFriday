@@ -372,3 +372,30 @@ def test_discover_yelp_key_still_wins():
         assert out["provider"] == "yelp"
     finally:
         s.close()
+
+
+def test_search_overpass_falls_back_to_next_mirror():
+    """overpass-api.de 504s under load — the search must try the next mirror."""
+    from urllib.error import HTTPError
+
+    calls = []
+
+    def _flaky(url, data):
+        calls.append(url)
+        if "overpass-api.de" in url:
+            raise HTTPError(url, 504, "Gateway Timeout", {}, None)
+        return {"elements": [OSM_NODE]}
+
+    cards = search_overpass(39.05, -95.68, 5, http_post=_flaky)
+    assert len(calls) == 2
+    assert "kumi" in calls[1]
+    assert cards[0]["name"] == "Test Bistro"
+
+
+def test_search_overpass_all_mirrors_down_raises():
+    def _down(url, data):
+        raise TimeoutError("timed out")
+
+    import pytest
+    with pytest.raises(RuntimeError, match="timed out"):
+        search_overpass(39.05, -95.68, 5, http_post=_down)

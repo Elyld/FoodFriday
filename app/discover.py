@@ -27,7 +27,12 @@ from app.models import DiscoverCache, Restaurant
 logger = logging.getLogger(__name__)
 
 YELP_SEARCH_URL = "https://api.yelp.com/v3/businesses/search"
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OVERPASS_URLS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.nchc.org.tw/api/interpreter",
+]
+OVERPASS_URL = OVERPASS_URLS[0]  # primary; search_overpass falls back through the rest
 CACHE_TTL_HOURS = 24
 HTTP_TIMEOUT = 20  # seconds (Yelp)
 OVERPASS_TIMEOUT = 25  # seconds — Overpass can be slow on big areas
@@ -192,13 +197,20 @@ def search_overpass(lat: float, lon: float, radius_km: float,
         f"out center {OVERPASS_LIMIT};"
     )
     body = urllib.parse.urlencode({"data": ql}).encode("utf-8")
-    try:
-        data = (http_post or _http_post)(OVERPASS_URL, body)
-    except TimeoutError as exc:
-        raise RuntimeError("OpenStreetMap search timed out — try again.") from exc
-    except Exception as exc:
+    last_exc: Exception | None = None
+    # The public Overpass instances are flaky (504s under load) — try each in
+    # order and only fail if all of them are down.
+    for url in OVERPASS_URLS:
+        try:
+            data = (http_post or _http_post)(url, body)
+            break
+        except Exception as exc:  # noqa: BLE001 — any failure moves to the next mirror
+            last_exc = exc
+            continue
+    else:
+        exc = last_exc
         # urllib raises URLError (a OSError) on timeouts; normalize the message
-        if "timed out" in str(exc).lower():
+        if exc is not None and "timed out" in str(exc).lower():
             raise RuntimeError("OpenStreetMap search timed out — try again.") from exc
         raise RuntimeError(f"OpenStreetMap search failed: {exc}") from exc
     elements = data.get("elements")
