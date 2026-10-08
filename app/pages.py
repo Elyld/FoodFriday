@@ -92,14 +92,22 @@ def restaurants_page(restaurants: list[dict], deals: list[dict]) -> str:
                 '<button class="btn-secondary btn-small muted" onclick="toggleInPicks(%d)" title="Skipped in Friday picks — tap to include">🚫 skipped</button>' % r["id"]
             )
             skip_badge = '' if in_picks else ' <span class="skip-badge">skipped in picks</span>'
+            track = r.get("track_visits", True)
+            track_btn = (
+                '<button class="btn-secondary btn-small" onclick="toggleTrack(%d)" title="Receipt scanner logs visits here">🧾 tracking</button>' % r["id"]
+                if track else
+                '<button class="btn-secondary btn-small muted" onclick="toggleTrack(%d)" title="Receipt scanner skips this place — tap to track">📵 not tracked</button>' % r["id"]
+            )
+            track_badge = '' if track else ' <span class="skip-badge">receipts off</span>'
             trs.append(f"""<tr>
-<td data-label="Name"><strong>{esc(r["name"])}</strong>{skip_badge}<br><span style="color:#7a6552;font-size:.85rem">{esc(r["cuisine"] or "")}</span></td>
+<td data-label="Name"><strong>{esc(r["name"])}</strong>{skip_badge}{track_badge}<br><span style="color:#7a6552;font-size:.85rem">{esc(r["cuisine"] or "")}</span></td>
 <td data-label="Price" class="price">{price}</td>
 <td data-label="Visits">{r["visit_count"]}</td>
 <td data-label="Last visit">{esc(last)}</td>
 <td data-label="Actions" style="white-space:nowrap">
   <button class="{star_cls}" onclick="toggleFav({r["id"]})" title="Favorite">{star}</button>
   {picks_btn}
+  {track_btn}
   <button class="btn-secondary btn-small" onclick="quickLog({r["id"]}, '{esc(r["name"]).replace(chr(39), "")}')">We ate here tonight</button>
   <button class="btn-danger btn-small" onclick="delRestaurant({r["id"]}, '{esc(r["name"]).replace(chr(39), "")}')">Delete</button>
 </td></tr>""")
@@ -273,8 +281,11 @@ def spending_page(a: dict) -> str:
 
 def settings_page(s: dict) -> str:
     enabled = "checked" if s["deal_scan_enabled"] else ""
+    r_enabled = "checked" if s.get("receipt_scan_enabled", True) else ""
     last_run = fmt_date(s["deal_scan_last_run"][:10]) if s.get("deal_scan_last_run") else "never"
     last_result = s.get("deal_scan_last_result") or "—"
+    r_last_run = fmt_date(s["receipt_scan_last_run"][:10]) if s.get("receipt_scan_last_run") else "never"
+    r_last_result = s.get("receipt_scan_last_result") or "—"
     scan_status = s.get("deal_scan_status") or "idle"
     status = (
         "✅ configured — scans daily"
@@ -285,14 +296,18 @@ def settings_page(s: dict) -> str:
         "<p style=\"color:#7a6552;font-size:.85rem\">🔄 <strong>Scan running…</strong> "
         "this usually takes 1–3 minutes. The result will appear below when it's done.</p>"
         if scan_status == "running"
-        else f"<p style=\"color:#7a6552;font-size:.85rem\">Last scan: {esc(last_run)} — {esc(last_result)}</p>"
+        else (
+            f"<p style=\"color:#7a6552;font-size:.85rem\">Last scan: {esc(last_run)} — "
+            f"deals: {esc(last_result)} · receipts: {esc(r_last_result)}</p>"
+        )
     )
     body = f"""
 <h2>Settings</h2>
 <h3>Deal scanner</h3>
-<p style="color:#7a6552">{status}. The scanner reads your promo emails over IMAP
-(read-only — nothing is marked read or deleted) and turns concrete offers into deals.
-A deal from a chain that isn't in your list yet gets its restaurant auto-added
+<p style="color:#7a6552">{status}. The scanner reads your mail over IMAP
+(read-only — nothing is marked read or deleted): promo emails become deals,
+and order receipts become visits in your history. A deal or receipt from a
+chain that isn't in your list yet gets its restaurant auto-added
 so the Friday boost works.</p>
 <form class="card-form" id="settings-form" onsubmit="return saveSettings(event)">
   <div class="field"><label>Gmail address</label>
@@ -303,7 +318,8 @@ so the Friday boost works.</p>
     <div class="field"><label>Daily scan time</label>
       <input id="s-time" type="time" value="{esc(s["deal_scan_time"])}"></div>
     <div class="field"><label>&nbsp;</label>
-      <label class="check"><input id="s-enabled" type="checkbox" {enabled}> scanning enabled</label></div>
+      <label class="check"><input id="s-enabled" type="checkbox" {enabled}> deal scanning enabled</label>
+      <label class="check"><input id="s-receipt-enabled" type="checkbox" {r_enabled}> receipt scanning enabled</label></div>
   </div>
   <div style="display:flex;gap:.6rem;flex-wrap:wrap">
     <button class="btn-primary btn-small" type="submit">Save</button>

@@ -41,6 +41,9 @@ from app.deal_scan import (
     K_LAST_RESULT,
     K_LAST_RUN,
     K_PASSWORD,
+    K_R_ENABLED,
+    K_R_LAST_RESULT,
+    K_R_LAST_RUN,
     K_STATUS,
     K_TIME,
     get_setting,
@@ -84,6 +87,7 @@ def restaurant_dict(r: Restaurant, visit_count: int, last_visit: date | None) ->
         "address": r.address,
         "favorite": bool(r.favorite),
         "include_in_picks": r.include_in_picks is not False,
+        "track_visits": r.track_visits is not False,
         "visit_count": visit_count,
         "last_visit": last_visit.isoformat() if last_visit else None,
     }
@@ -175,6 +179,7 @@ class RestaurantIn(BaseModel):
     address: str | None = None
     favorite: bool | None = False
     include_in_picks: bool | None = True
+    track_visits: bool | None = True
 
 
 @app.get("/api/restaurants")
@@ -224,6 +229,8 @@ def update_restaurant(rid: int, payload: RestaurantIn, session: Session = Depend
         r.favorite = bool(payload.favorite)
     if payload.include_in_picks is not None:
         r.include_in_picks = bool(payload.include_in_picks)
+    if payload.track_visits is not None:
+        r.track_visits = bool(payload.track_visits)
     session.commit()
     return {"ok": True}
 
@@ -256,6 +263,18 @@ def toggle_in_picks(rid: int, session: Session = Depends(get_session)):
     r.include_in_picks = not (r.include_in_picks is not False)
     session.commit()
     return {"include_in_picks": r.include_in_picks is not False}
+
+
+@app.post("/api/restaurants/{rid}/track-visits")
+def toggle_track_visits(rid: int, session: Session = Depends(get_session)):
+    """Skip-list for the receipt scanner: when off, no visits are auto-logged
+    for this restaurant (e.g. the kid's McDonald's runs)."""
+    r = session.get(Restaurant, rid)
+    if not r:
+        raise HTTPException(404, "Restaurant not found")
+    r.track_visits = not (r.track_visits is not False)
+    session.commit()
+    return {"track_visits": r.track_visits is not False}
 
 
 class VisitIn(BaseModel):
@@ -568,6 +587,9 @@ def settings_view(session: Session) -> dict:
         "deal_scan_last_run": get_setting(session, K_LAST_RUN),
         "deal_scan_last_result": get_setting(session, K_LAST_RESULT),
         "deal_scan_status": get_setting(session, K_STATUS, "idle") or "idle",
+        "receipt_scan_enabled": get_setting(session, K_R_ENABLED, "1") == "1",
+        "receipt_scan_last_run": get_setting(session, K_R_LAST_RUN),
+        "receipt_scan_last_result": get_setting(session, K_R_LAST_RESULT),
         "configured": scan_enabled(session),
         # discover
         "yelp_api_key_set": bool(yelp_key),
@@ -590,6 +612,7 @@ class SettingsIn(BaseModel):
     gmail_app_password: str | None = None  # write-only; ignored when empty/masked
     deal_scan_enabled: bool | None = None
     deal_scan_time: str | None = None  # "HH:MM"
+    receipt_scan_enabled: bool | None = None
     yelp_api_key: str | None = None  # write-only; ignored when empty/masked
     home_lat: str | None = None
     home_lon: str | None = None
@@ -626,6 +649,8 @@ def update_settings(payload: SettingsIn, session: Session = Depends(get_session)
         set_setting(session, K_ENABLED, "1" if payload.deal_scan_enabled else "0")
     if payload.deal_scan_time is not None:
         set_setting(session, K_TIME, _validate_hhmm(payload.deal_scan_time, "Scan time"))
+    if payload.receipt_scan_enabled is not None:
+        set_setting(session, K_R_ENABLED, "1" if payload.receipt_scan_enabled else "0")
     # discover
     if payload.yelp_api_key and payload.yelp_api_key != MASKED:
         set_setting(session, K_YELP_KEY, payload.yelp_api_key.strip() or None)
@@ -682,10 +707,11 @@ def test_nudge(session: Session = Depends(get_session)):
 
 @app.post("/api/deals/scan", status_code=202)
 def scan_deals_now():
-    """Start a background deal scan and return immediately.
+    """Start a background Gmail scan and return immediately.
 
+    Runs both phases: deal scanning + receipt scanning (if enabled).
     202 {"status": "started"} — the scan runs in a daemon thread; check the
-    Settings page (or GET /api/settings) for the result line.
+    Settings page (or GET /api/settings) for the result lines.
     409 if a scan is already running; 400 if Gmail isn't configured.
     """
     from app.database import SessionLocal

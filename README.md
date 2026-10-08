@@ -59,20 +59,22 @@ Add them by hand on the `/restaurants` page (🏷️ Deals section at the bottom
 
 **Item-level bonus:** if a deal's item keywords substring-match anything in that restaurant's past receipt items (e.g. keyword `chip` matches an ordered `Chips`), the restaurant gets the extra ×1.25 multiplier.
 
-### Automatic deal scanning (Gmail over IMAP)
+### Automatic deal + receipt scanning (Gmail over IMAP)
 
-The app scans your Gmail for promos itself — no manual imports. Open **/settings** and paste your Gmail address plus an app password; the scanner then runs every morning at your chosen time (default 7:00 AM) and turns concrete offers into deals. There's also a **🔍 Scan now** button on the Settings page.
+The app scans your Gmail itself — no manual imports. Open **/settings** and paste your Gmail address plus an app password; the scanner then runs every morning at your chosen time (default 7:00 AM) in **two phases**: promos become deals, and order receipts become visits in your history. There's also a **🔍 Scan now** button on the Settings page. Each phase has its own enable toggle and its own result line ("deals: … · receipts: …").
 
-**Scans run in the background:** hitting Scan now returns instantly and the scan works through your promos behind the scenes — a first run over ~16 senders × 14 days of mail normally takes **1–3 minutes**. The Settings page shows a "🔄 Scan running…" notice while it's going, and the result line (e.g. "3 new deals") appears when it lands. If the button seems to do nothing, give it a couple of minutes and refresh. Overlapping scans are blocked: a second Scan now (or the daily job firing mid-scan) just stands down.
+**Scans run in the background:** hitting Scan now returns instantly and the scan works through your mail behind the scenes — a first run over ~30 senders × 14 days of mail normally takes **1–3 minutes**. The Settings page shows a "🔄 Scan running…" notice while it's going, and the result lines appear when it lands. If the button seems to do nothing, give it a couple of minutes and refresh. Overlapping scans are blocked: a second Scan now (or the daily job firing mid-scan) just stands down.
 
 **One-time setup:**
 1. Your Google account needs 2-step verification turned on.
 2. Go to `myaccount.google.com/apppasswords` → create an app password (name it "FoodFriday").
 3. Paste the address + app password into Settings → Save.
 
-The scan is **read-only**: it SELECTs your inbox and fetches with `BODY.PEEK[]`, so nothing is marked read, moved, or deleted. It looks at the last 14 days of emails from your chains' promo senders, keeps only concrete offers (skips brand fluff, merch, and expired promos), and extracts expiry the same way the manual script did — *"today only"* → that date, *"Valid thru 11/1/2026"* → parsed, unclear → 7 days out. Re-runs never create duplicates (dedupe on restaurant + title + valid-until).
+The scan is **read-only**: it SELECTs your inbox and fetches with `BODY.PEEK[]`, so nothing is marked read, moved, or deleted. Deals: it looks at the last 14 days of emails from your chains' promo senders, keeps only concrete offers (skips brand fluff, merch, and expired promos), and extracts expiry the same way the manual script did — *"today only"* → that date, *"Valid thru 11/1/2026"* → parsed, unclear → 7 days out. Re-runs never create duplicates (dedupe on restaurant + title + valid-until).
 
-If a deal arrives from a chain that **isn't in your restaurant list**, the restaurant is auto-added (marked "auto-added by the deal scanner", $ tier, included in Friday picks) so the weight boost works — toggle it off or delete it if it's not your kind of place.
+**Receipts:** order confirmations are matched by sender + subject against 20 known patterns (Chipotle, Taco Bell, Domino's, Casey's, Sonic, Spangles, Chili's, Panera, Buffalo Wild Wings, Whataburger, Little Caesars, Arby's, KFC, Wendy's, Dairy Queen, Raising Cane's, Pizza Hut, DoorDash, Uber Eats, Grubhub). Totals are parsed per-chain; a confirmation with no parseable total is still logged with a blank total so recency weighting sees it. Receipts from a chain **not in your list** auto-add the restaurant ("auto-added by the receipt scanner"). Re-runs never duplicate (dedupe on `gmail:<message-id>`).
+
+**Skip list:** every restaurant row has a 🧾 tracking toggle. Flip it to 📵 and the receipt scanner skips that place entirely — no visits, no auto-anything. (If you ever re-add McDonald's for the kid's Friday runs, this is the switch.)
 
 **About the app password:** it's stored only in this app's own SQLite database, travels over TLS straight to Gmail's IMAP server, and is never shown back to you — the Settings page and API only ever report "set" or blank. There's a **Forget Gmail** button to wipe it entirely.
 

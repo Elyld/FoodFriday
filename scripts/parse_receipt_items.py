@@ -28,91 +28,14 @@ MAIL_DIR = Path.home() / "workspace" / "email" / "gmail"
 
 
 # ---------- chain parsers: markdown body -> [item names] ----------
+# (moved to app/receipt_parse.py so the in-app receipt scanner can reuse them)
 
-def parse_chipotle(body: str) -> list[str]:
-    """Table rows like `| Chicken Bowl | |`; customization rows have commas."""
-    items = []
-    noise = re.compile(r"payment method|grams|impact|howgood|powered by|order summary", re.I)
-    for line in body.splitlines():
-        m = re.match(r"^\|\s*([^|]+?)\s*\|\s*\|$", line.strip())
-        if not m:
-            continue
-        name = m.group(1).strip()
-        if not name or ", " in name or "$(" in name or name.startswith("$"):
-            continue
-        if len(name) > 60 or noise.search(name):
-            continue
-        items.append(name)
-    return items
-
-
-def parse_sonic(body: str) -> list[str]:
-    """`Nx` row then item-name row (blank lines ok); modifiers start with • or + $."""
-    items = []
-    expect_item = False
-    for line in body.splitlines():
-        line = line.strip()
-        if re.match(r"^\|\s*\d+x\s*\|$", line):
-            expect_item = True
-            continue
-        if expect_item and re.match(r"^(\|\s*\|)?$", line):
-            continue  # blank or empty table row between quantity and item
-        if expect_item:
-            m = re.match(r"^\|\s*([^|•+]+?)\s*\|$", line)
-            expect_item = False
-            if m:
-                name = m.group(1).strip()
-                if name and not name.startswith("$"):
-                    items.append(name)
-    return items
-
-
-def parse_spangles(body: str) -> list[str]:
-    """After 'Your receipt': `Nx` line, then the item name on the next line."""
-    items = []
-    in_receipt = False
-    expect_item = False
-    for line in body.splitlines():
-        s = line.strip()
-        if "Your receipt" in s:
-            in_receipt = True
-            continue
-        if not in_receipt:
-            continue
-        if re.match(r"^\d+[x×]$", s):
-            expect_item = True
-            continue
-        if expect_item and s:
-            expect_item = False
-            if ", " not in s and not s.startswith("$"):
-                items.append(s)
-    return items
-
-
-def parse_caseys(body: str) -> list[str]:
-    """After 'Order Summary': lines between --- separators; skip $-promo lines."""
-    items = []
-    in_summary = False
-    for line in body.splitlines():
-        s = line.strip()
-        if "Order Summary" in s:
-            in_summary = True
-            continue
-        if not in_summary:
-            continue
-        if s in ("---", ""):
-            continue
-        if s.startswith("$") or s.startswith("|"):
-            continue  # promo/deal line or table markup, not an item
-        if re.match(r"^(Subtotal|Total|Tax|Payment|Thank you)", s, re.I):
-            break
-        if re.match(r"^(Original|Thin|Stuffed|Hand.?Tossed)\s+(Crust\s+)?(Small|Medium|Large)$", s, re.I):
-            continue  # size modifier, not an item
-        if "cash" in s.lower() and "casey" in s.lower():
-            continue  # loyalty line
-        items.append(s)
-    # dedupe, keep order
-    return list(dict.fromkeys(items))
+from app.receipt_parse import (
+    parse_caseys_items as parse_caseys,
+    parse_chipotle_items as parse_chipotle,
+    parse_sonic_items as parse_sonic,
+    parse_spangles_items as parse_spangles,
+)
 
 
 PARSERS = {

@@ -87,6 +87,8 @@ def seed():
     try:
         s.merge(Setting(key="deal_scan_last_run", value="2026-10-07T07:00"))
         s.merge(Setting(key="deal_scan_last_result", value="2 new deals (1 new restaurant added)"))
+        s.merge(Setting(key="receipt_scan_last_run", value="2026-10-07T07:00"))
+        s.merge(Setting(key="receipt_scan_last_result", value="3 new visits"))
         s.merge(Setting(key="friday_nudge_last_result", value="sent (2026-10-08T10:00)"))
         s.commit()
     finally:

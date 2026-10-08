@@ -24,8 +24,13 @@ from datetime import date, datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.deal_parse import chain_domains, parse_promo
+from app.receipt_parse import (
+    detect_receipt,
+    parse_receipt,
+    receipt_sender_domains,
+)
 
-from app.models import Deal, Restaurant, Setting
+from app.models import Deal, Restaurant, Setting, Visit
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +42,13 @@ K_PASSWORD = "gmail_app_password"
 K_ENABLED = "deal_scan_enabled"
 K_TIME = "deal_scan_time"          # "HH:MM", 24h, local container time
 K_LAST_RUN = "deal_scan_last_run"      # ISO datetime
-K_LAST_RESULT = "deal_scan_last_result"  # human-readable summary
+K_LAST_RESULT = "deal_scan_last_result"  # human-readable summary (deals)
 K_STATUS = "deal_scan_status"            # idle | running | done | error
+
+# receipt phase (same scan, same Gmail creds)
+K_R_ENABLED = "receipt_scan_enabled"         # "1"/"0", default on
+K_R_LAST_RUN = "receipt_scan_last_run"      # ISO datetime
+K_R_LAST_RESULT = "receipt_scan_last_result"  # human-readable summary (receipts)
 
 # A stalled Gmail connection must never hang a request/scan forever.
 IMAP_TIMEOUT = 30  # seconds
@@ -67,6 +77,12 @@ def scan_configured(session: Session) -> bool:
 
 def scan_enabled(session: Session) -> bool:
     if get_setting(session, K_ENABLED, "1") != "1":
+        return False
+    return scan_configured(session)
+
+
+def receipt_scan_enabled(session: Session) -> bool:
+    if get_setting(session, K_R_ENABLED, "1") != "1":
         return False
     return scan_configured(session)
 
@@ -110,6 +126,42 @@ def _message_body(msg: email.message.Message) -> str:
         charset = msg.get_content_charset() or "utf-8"
         chunks.append(payload.decode(charset, errors="replace"))
     return "\n".join(chunks)[:20000]
+
+
+def _html_to_text(html: str) -> str:
+    """Crude HTML → text for receipt scanning (tables become spaced text)."""
+    import html as _html
+
+    text = re.sub(r"(?is)<(script|style).*?</\1>", " ", html)
+    text = re.sub(r"(?is)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?is)</(p|div|tr|table|li|h\d)>", "\n", text)
+    text = re.sub(r"(?is)<[^>]+>", " ", text)
+    return _html.unescape(text)
+
+
+def _receipt_text(msg: email.message.Message) -> str:
+    """Searchable text for receipt parsing: plain parts + stripped HTML parts."""
+    parts: list[str] = []
+    for part in msg.walk():
+        ctype = part.get_content_type()
+        if "attachment" in (part.get("Content-Disposition") or ""):
+            continue
+        payload = part.get_payload(decode=True) or b""
+        if not payload:
+            continue
+        charset = part.get_content_charset() or "utf-8"
+        text = payload.decode(charset, errors="replace")
+        if ctype == "text/html":
+            text = _html_to_text(text)
+        elif ctype != "text/plain":
+            continue
+        parts.append(text)
+    return "\n".join(parts)[:40000]
+
+
+def _message_id(msg: email.message.Message) -> str | None:
+    mid = (msg.get("Message-ID") or "").strip().strip("<>")
+    return mid or None
 
 
 def fetch_promos(
@@ -234,13 +286,141 @@ def store_deals(session: Session, deals: list[dict]) -> tuple[int, int]:
     return deals_added, restaurants_added
 
 
+def fetch_receipts(
+    address: str,
+    app_password: str,
+    imap_class=imaplib.IMAP4_SSL,
+    since: date | None = None,
+    today: date | None = None,
+) -> list[dict]:
+    """Search Gmail for order receipts from known chains.
+
+    Returns dicts: chain, sent (date), total (float|None), items (list),
+    msgid, subject. `imap_class` is injectable for tests.
+    """
+    today = today or date.today()
+    since = since or (today - timedelta(days=SCAN_WINDOW_DAYS))
+    since_str = since.strftime("%d-%b-%Y")
+
+    conn = None
+    try:
+        conn = imap_class("imap.gmail.com", timeout=IMAP_TIMEOUT)
+        conn.login(address, app_password)
+        conn.select("INBOX", readonly=True)
+        seen_uids: set[bytes] = set()
+        receipts: list[dict] = []
+        for domain in receipt_sender_domains():
+            status, data = conn.search(None, "FROM", domain, "SINCE", since_str)
+            if status != "OK":
+                continue
+            for uid in (data[0] or b"").split():
+                if uid in seen_uids:
+                    continue
+                seen_uids.add(uid)
+                status, fetched = conn.fetch(uid, "(BODY.PEEK[])")
+                if status != "OK" or not fetched:
+                    continue
+                raw = fetched[0][1] if isinstance(fetched[0], tuple) else None
+                if not raw:
+                    continue
+                msg = email.message_from_bytes(raw)
+                sender = _decode_header(msg.get("From"))
+                subject = _decode_header(msg.get("Subject"))
+                chain = detect_receipt(sender, subject)
+                if not chain:
+                    continue  # promo or unrelated mail from a known sender
+                sent = _message_date(msg)
+                if sent < since:
+                    continue
+                parsed = parse_receipt(chain, _receipt_text(msg))
+                msgid = _message_id(msg)
+                receipts.append(
+                    {
+                        "chain": chain["name"],
+                        "sent": sent,
+                        "total": parsed["total"],
+                        "items": parsed["items"],
+                        "msgid": msgid,
+                        "subject": subject,
+                    }
+                )
+        return receipts
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            try:
+                conn.logout()
+            except Exception:
+                pass
+
+
+def store_receipts(session: Session, receipts: list[dict]) -> tuple[int, int]:
+    """Insert parsed receipts as visits with dedupe + auto-create restaurants.
+
+    Restaurants with track_visits=False are skipped entirely (the McDonald's /
+    kid-orders skip list). Dedupes on external_id ("gmail:<message-id>").
+    Confirmation-only emails (no parseable total) are logged with total=None.
+
+    Returns (visits_added, restaurants_added).
+    """
+    restaurants_added = 0
+    visits_added = 0
+    name_to_r: dict[str, Restaurant] = {_norm(r.name): r for r in session.query(Restaurant).all()}
+    existing_ext = {
+        v.external_id
+        for v in session.query(Visit).filter(Visit.external_id.isnot(None)).all()
+    }
+
+    for rc in receipts:
+        if not rc.get("msgid"):
+            continue  # can't dedupe without a message id — skip rather than risk dupes
+        ext_id = f"gmail:{rc['msgid']}"
+        if ext_id in existing_ext:
+            continue
+        rname = _norm(rc["chain"])
+        r = name_to_r.get(rname)
+        if r is None:
+            r = Restaurant(
+                name=rc["chain"],
+                cuisine=None,
+                price_tier=1,
+                notes="auto-added by the receipt scanner",
+                favorite=False,
+                include_in_picks=True,
+                track_visits=True,
+            )
+            session.add(r)
+            session.flush()
+            name_to_r[rname] = r
+            restaurants_added += 1
+        if r.track_visits is False:
+            continue  # skip-listed (e.g. kid's McDonald's runs) — no visit, no noise
+        items = rc.get("items") or []
+        session.add(
+            Visit(
+                restaurant_id=r.id,
+                visited_at=rc["sent"],
+                total=rc["total"],
+                source="email",
+                external_id=ext_id,
+                items="\n".join(items) if items else None,
+            )
+        )
+        existing_ext.add(ext_id)
+        visits_added += 1
+    return visits_added, restaurants_added
+
+
 def run_scan(session: Session, imap_class=imaplib.IMAP4_SSL,
              today: date | None = None) -> dict:
-    """Full scan: fetch promos over IMAP, store new deals, record the result.
+    """Full scan: deal phase + receipt phase over one IMAP session each.
 
     Never raises for scan-time failures (bad creds, stalled connection, parse
-    errors): those are recorded into the last-result setting and returned as
-    ``{"ok": False, "error": ...}``. Only a missing Gmail configuration raises.
+    errors): those are recorded into the last-result settings and returned as
+    ``{"ok": False, ...}``. Only a missing Gmail configuration raises.
 
     `today` is injectable for tests (defaults to the real current date).
     """
@@ -248,30 +428,63 @@ def run_scan(session: Session, imap_class=imaplib.IMAP4_SSL,
     password = get_setting(session, K_PASSWORD)
     if not address or not password:
         raise RuntimeError("Gmail not configured — add your address and app password in Settings.")
+    errors: list[str] = []
+
+    # --- deal phase ---
     try:
         deals = fetch_promos(address, password, imap_class=imap_class, today=today)
         added, new_restaurants = store_deals(session, deals)
+        if added:
+            deal_summary = f"{added} new deal{'s' if added != 1 else ''}"
+            if new_restaurants:
+                deal_summary += f" ({new_restaurants} new restaurant{'s' if new_restaurants != 1 else ''} added)"
+        else:
+            deal_summary = "no new deals"
     except Exception as exc:
-        now = datetime.now().isoformat(timespec="minutes")
-        set_setting(session, K_STATUS, "error")
-        set_setting(session, K_LAST_RUN, now)
-        set_setting(session, K_LAST_RESULT, f"error: {exc}")
-        session.commit()
         logger.warning("deal scan failed: %s", exc)
-        return {"ok": False, "error": str(exc)}
-    now = datetime.now().isoformat(timespec="minutes")
-    if added:
-        summary = f"{added} new deal{'s' if added != 1 else ''}"
-        if new_restaurants:
-            summary += f" ({new_restaurants} new restaurant{'s' if new_restaurants != 1 else ''} added)"
+        deal_summary = f"error: {exc}"
+        errors.append(f"deals: {exc}")
+        added, new_restaurants = 0, 0
+        deals = []
+
+    # --- receipt phase ---
+    if receipt_scan_enabled(session):
+        try:
+            receipts = fetch_receipts(address, password, imap_class=imap_class, today=today)
+            v_added, r_added = store_receipts(session, receipts)
+            if v_added:
+                receipt_summary = f"{v_added} new visit{'s' if v_added != 1 else ''}"
+                if r_added:
+                    receipt_summary += f" ({r_added} new restaurant{'s' if r_added != 1 else ''} added)"
+            else:
+                receipt_summary = "no new receipts"
+        except Exception as exc:
+            logger.warning("receipt scan failed: %s", exc)
+            receipt_summary = f"error: {exc}"
+            errors.append(f"receipts: {exc}")
+            v_added, r_added = 0, 0
     else:
-        summary = "no new deals"
-    set_setting(session, K_STATUS, "done")
+        receipt_summary = "receipt scanning disabled"
+        v_added, r_added = 0, 0
+
+    now = datetime.now().isoformat(timespec="minutes")
+    set_setting(session, K_STATUS, "error" if errors else "done")
     set_setting(session, K_LAST_RUN, now)
-    set_setting(session, K_LAST_RESULT, summary)
+    set_setting(session, K_LAST_RESULT, deal_summary)
+    set_setting(session, K_R_LAST_RUN, now)
+    set_setting(session, K_R_LAST_RESULT, receipt_summary)
     session.commit()
-    return {"ok": True, "deals_found": len(deals), "deals_added": added,
-            "restaurants_added": new_restaurants, "summary": summary}
+    return {
+        "ok": not errors,
+        "error": "; ".join(errors) if errors else None,
+        "deals_found": len(deals),
+        "deals_added": added,
+        "restaurants_added": new_restaurants,
+        "summary": deal_summary,
+        "visits_added": v_added,
+        "receipt_restaurants_added": r_added,
+        "receipt_summary": receipt_summary,
+    }
 
 
 # ---------- background execution ----------

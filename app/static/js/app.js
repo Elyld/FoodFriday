@@ -146,6 +146,11 @@ async function toggleInPicks(id) {
   catch (e) { toast('Couldn\'t update: ' + e.message); }
 }
 
+async function toggleTrack(id) {
+  try { await api('POST', '/api/restaurants/' + id + '/track-visits'); location.reload(); }
+  catch (e) { toast('Couldn\'t update: ' + e.message); }
+}
+
 async function quickLog(id, name) {
   try {
     await api('POST', '/api/visits', { restaurant_id: id });
@@ -199,6 +204,7 @@ async function saveSettings(e) {
     gmail_app_password: document.getElementById('s-password').value || null,
     deal_scan_enabled: document.getElementById('s-enabled').checked,
     deal_scan_time: document.getElementById('s-time').value || null,
+    receipt_scan_enabled: document.getElementById('s-receipt-enabled').checked,
   };
   try {
     await api('PUT', '/api/settings', body);
@@ -220,8 +226,10 @@ async function scanNow() {
       await new Promise(r => setTimeout(r, 10000));
       const s = await api('GET', '/api/settings');
       if (s.deal_scan_status !== 'running') {
-        const result = s.deal_scan_last_result || 'done';
-        box.innerHTML = '<div class="preview-box"><strong>Scan done:</strong> ' + escapeHtml(result) + '.</div>';
+        const deals = s.deal_scan_last_result || 'done';
+        const receipts = s.receipt_scan_last_result || '—';
+        box.innerHTML = '<div class="preview-box"><strong>Scan done:</strong> deals: ' +
+          escapeHtml(deals) + ' · receipts: ' + escapeHtml(receipts) + '.</div>';
         toast('Scan complete 🎉');
         return;
       }

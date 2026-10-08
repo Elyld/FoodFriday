@@ -27,6 +27,9 @@ class Restaurant(Base):
     include_in_picks: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="1"
     )
+    track_visits: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1"
+    )  # receipt scanner skip-list: False = never auto-log visits (e.g. kid's McDonald's)
     yelp_id: Mapped[str | None] = mapped_column(
         String(255), nullable=True
     )  # Yelp business id, set when added from Discover
