@@ -318,10 +318,11 @@ let discoverBusinesses = [];
 async function discoverInit() {
   try {
     const s = await api('GET', '/api/settings');
-    if (!s.yelp_api_key_set || !s.home_lat || !s.home_lon) {
+    if (!s.home_lat || !s.home_lon) {
       document.getElementById('discover-setup').innerHTML =
-        '<div class="empty">Add your <strong>Yelp API key</strong> and <strong>home location</strong> in ' +
-        '<a href="/settings">Settings</a> to search for new places nearby.</div>';
+        '<div class="empty">Add your <strong>home location</strong> in ' +
+        '<a href="/settings">Settings</a> to search for new places nearby. ' +
+        'No API key needed — search runs on OpenStreetMap.</div>';
       return;
     }
     document.getElementById('discover-controls').style.display = 'block';
@@ -340,11 +341,12 @@ async function searchDiscover(refresh) {
   try {
     const data = await api('GET', `/api/discover?radius_km=${radius}&refresh=${refresh ? 1 : 0}`);
     discoverBusinesses = data.businesses;
+    const via = data.provider === 'yelp' ? 'Yelp' : 'OpenStreetMap';
     if (data.cached && data.cached_at) {
       const d = new Date(data.cached_at);
-      note.textContent = `Cached ${d.toLocaleString()} — hit Refresh for a live search.`;
+      note.textContent = `Via ${via} · cached ${d.toLocaleString()} — hit Refresh for a live search.`;
     } else if (!data.cached) {
-      note.textContent = 'Live results, cached for 24h.';
+      note.textContent = `Via ${via} · live results, cached for 24h.`;
     }
     if (!discoverBusinesses.length) {
       box.innerHTML = '<div class="empty">Nothing new nearby — everything found is already in your list. 🎉</div>';

@@ -200,7 +200,8 @@ def history_page(visits: list[dict]) -> str:
 def discover_page() -> str:
     body = """
 <h2>🧭 Discover nearby</h2>
-<p style="color:#7a6552">New places around you, from Yelp — spots already in your list are hidden.
+<p style="color:#7a6552">New places around you, from OpenStreetMap (or Yelp if you've added a key)
+— spots already in your list are hidden.
 Add one and it's in the rotation (and eligible for "✨ Somewhere new").</p>
 <div id="discover-setup"></div>
 <div class="card-form" id="discover-controls" style="display:none">
@@ -357,10 +358,10 @@ so the Friday boost works.</p>
 <code>myaccount.google.com/apppasswords</code> and paste it above. Each password is stored only
 in this app's own database, never leaves your server except to log in to Gmail's IMAP,
 and is never shown back to you.</p>
-<h3>🧭 Discover (Yelp)</h3>
+<h3>🧭 Discover (nearby search)</h3>
 <p style="color:#7a6552">Find new places around you on the <a href="/discover">Discover</a> tab.
-Needs a free Yelp API key: <code>developer.yelp.com</code> → Create App → Starter plan
-(free, no credit card). Results are cached for 24 hours so the free quota lasts.</p>
+Searches OpenStreetMap — no key or signup needed. A Yelp API key below is optional:
+with one, Discover uses Yelp instead (adds star ratings). Results are cached for 24 hours.</p>
 <form class="card-form" id="discover-settings-form" onsubmit="return saveDiscoverSettings(event)">
   <div class="field"><label>Yelp API key</label>
     <input id="y-key" type="password" maxlength="255" placeholder="{'set — leave blank to keep' if s["yelp_api_key_set"] else 'paste your Yelp Fusion API key'}" autocomplete="new-password"></div>

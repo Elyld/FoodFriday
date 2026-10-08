@@ -806,7 +806,7 @@ def scan_deals_now():
     return {"status": "started"}
 
 
-# ---------- discover (Yelp nearby) ----------
+# ---------- discover (nearby: Yelp if keyed, else OpenStreetMap) ----------
 
 def _parse_float(value: str | None) -> float | None:
     try:
@@ -818,14 +818,13 @@ def _parse_float(value: str | None) -> float | None:
 @app.get("/api/discover")
 def api_discover(radius_km: float = 10.0, refresh: bool = False,
                 session: Session = Depends(get_session)):
-    """Nearby restaurants from Yelp, hiding ones already in the list.
+    """Nearby restaurants, hiding ones already in the list.
 
-    Results are cached 24h per location+radius so the free Yelp quota isn't
-    burned by repeat views. `refresh=true` forces a live call.
+    Uses Yelp when an API key is configured in Settings, otherwise
+    OpenStreetMap/Overpass (no key needed). Results are cached 24h per
+    provider+location+radius. `refresh=true` forces a live call.
     """
     api_key = get_setting(session, K_YELP_KEY)
-    if not api_key:
-        raise HTTPException(400, "Yelp not configured — add your API key in Settings.")
     lat = _parse_float(get_setting(session, K_HOME_LAT))
     lon = _parse_float(get_setting(session, K_HOME_LON))
     if lat is None or lon is None:
@@ -834,8 +833,8 @@ def api_discover(radius_km: float = 10.0, refresh: bool = False,
     try:
         return discover_nearby(session, lat, lon, radius_km, api_key, refresh=refresh)
     except Exception as exc:
-        logger.warning("yelp discover failed: %s", exc)
-        raise HTTPException(502, f"Yelp search failed: {exc}")
+        logger.warning("discover failed: %s", exc)
+        raise HTTPException(502, f"Nearby search failed: {exc}")
 
 
 class DiscoverAddIn(BaseModel):

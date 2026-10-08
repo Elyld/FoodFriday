@@ -24,11 +24,11 @@ Hit **Pick 3 for us** and it deals three restaurants from your rotation — weig
 |---|---|
 | `/` | The picker: 3 cards, tap-to-log, veto, reroll, Friday / Somewhere-new modes |
 | `/restaurants` | Your restaurant list — cuisine, price ($–$$$), notes, ★ favorites, visit counts, one-tap "We ate here tonight" |
-| `/discover` | 🧭 Nearby restaurants from Yelp (ratings, distance, price) — one-tap add to your list |
+| `/discover` | 🧭 Nearby restaurants via OpenStreetMap (distance, cuisine) — one-tap add to your list |
 | `/spending` | 💰 Spending dashboard: all-time + average, last 6 months, top restaurants, by cuisine |
 | `/history` | Every logged visit (date, total, source), with delete + per-trip "in picks" checkbox |
 | `/import` | Upload a seed JSON → preview → confirm. Re-imports are safe no-ops. |
-| `/settings` | Email accounts for the deal/receipt scanner, Yelp/Discover, Discord Friday nudge, picker options |
+| `/settings` | Email accounts for the deal/receipt scanner, Discover location (+ optional Yelp key), Discord Friday nudge, picker options |
 
 ## Import format
 
@@ -95,15 +95,13 @@ Known-good formats: Chipotle, Sonic, Spangles, Casey's. After updating the seed,
 
 **Privacy note:** your real history (email-receipt backfills and the like) should live in a local file like `seed/*.seed.json` — that directory is gitignored and never committed, and the Docker image ships with an empty database. Upload your real data through the Import page after deploying.
 
-## 🧭 Discover (nearby restaurants via Yelp)
+## 🧭 Discover (nearby restaurants via OpenStreetMap)
 
-The Discover tab finds restaurants around you that aren't in your list yet — with Yelp ratings, price, distance, and cuisine. Spots already in your database are hidden automatically. **➕ Add to my restaurants** drops one into the rotation (its Yelp rating is saved and gives it a slight edge in ✨ Somewhere new mode).
+The Discover tab finds restaurants around you that aren't in your list yet — with distance, cuisine, and address. Spots already in your database are hidden automatically. **➕ Add to my restaurants** drops one into the rotation (eligible for ✨ Somewhere new mode).
 
-**Setup** (Settings → Discover):
-1. Get a free Yelp Fusion API key: `developer.yelp.com` → Create App → **Starter** plan (free, no credit card — ~150 calls/day).
-2. Paste the key, set your home location (type it or hit **📍 Use my location**), Save.
+**Setup** (Settings → Discover): set your home location (type it or hit **📍 Use my location**) and Save — that's it, no key or signup. Search runs on OpenStreetMap/Overpass.
 
-Results are **cached for 24 hours** per location + radius so the free quota isn't burned by repeat views — the page shows "cached Xh ago" with a Refresh link for a live search. The key is stored only in this app's own database and never shown back to you (same masking as the Gmail app password); there's a **Forget Yelp key & webhook** button to wipe it.
+Why not Yelp? Yelp retired free self-serve app creation (the create button is greyed out and their docs now push paid plans), so OpenStreetMap is the default provider. If you ever get a Yelp Fusion API key, pasting it in Settings switches Discover to Yelp (adds star ratings); the key is stored only in this app's own database and never shown back to you. Results are **cached for 24 hours** per provider + location + radius — the page shows which provider served the results and a Refresh link for a live search.
 
 ## 🔔 Friday nudge (Discord)
 

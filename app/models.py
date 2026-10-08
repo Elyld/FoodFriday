@@ -122,15 +122,16 @@ class Setting(Base):
 
 
 class DiscoverCache(Base):
-    """Cached Yelp nearby-search results — keyed by rounded location + radius.
+    """Cached nearby-search results — keyed by provider + rounded location + radius.
 
-    Yelp's free Starter plan is ~150 calls/day, so repeat views of the same
-    search are served from here for CACHE_TTL_HOURS instead of hitting the API.
+    Repeat views of the same search are served from here for CACHE_TTL_HOURS
+    instead of hitting the provider API.
     """
 
     __tablename__ = "discover_cache"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider: Mapped[str | None] = mapped_column(String(16), nullable=True)  # "yelp"|"osm" (NULL = legacy yelp rows)
     lat: Mapped[float] = mapped_column(Float, nullable=False)  # rounded to 3 decimals
     lon: Mapped[float] = mapped_column(Float, nullable=False)  # rounded to 3 decimals
     radius_km: Mapped[float] = mapped_column(Float, nullable=False)

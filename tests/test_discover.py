@@ -22,7 +22,10 @@ from app.discover import (  # noqa: E402
     K_YELP_KEY,
     discover,
     get_cached,
+    haversine_mi,
+    humanize_cuisine,
     price_str_to_tier,
+    search_overpass,
     search_yelp,
     store_cache,
 )
@@ -164,9 +167,8 @@ def test_discover_cache_expires_after_24h():
         s.close()
 
 
-def test_discover_requires_key_and_location():
-    _settings(yelp_api_key=None, home_lat=None, home_lon=None)
-    # clear via direct settings (None clears)
+def test_discover_requires_location_not_key():
+    # Yelp key is optional now — but home location is still required
     from app.deal_scan import set_setting
 
     s = SessionLocal()
@@ -179,7 +181,26 @@ def test_discover_requires_key_and_location():
         s.close()
     r = client.get("/api/discover")
     assert r.status_code == 400
-    assert "Yelp" in r.json()["detail"]
+    assert "Home location" in r.json()["detail"]
+
+
+def test_discover_without_key_uses_osm(monkeypatch):
+    # no Yelp key -> provider falls back to Overpass, no 400
+    import app.discover as disc
+    from app.deal_scan import set_setting
+
+    s = SessionLocal()
+    try:
+        set_setting(s, K_YELP_KEY, None)  # hermetic: key must be absent
+        s.commit()
+    finally:
+        s.close()
+    _settings(home_lat="39.05", home_lon="-95.68")
+    monkeypatch.setattr(disc, "search_overpass",
+                        lambda lat, lon, r, http_post=None: [{"name": "OSM Diner"}])
+    r = client.get("/api/discover")
+    assert r.status_code == 200
+    assert r.json()["provider"] == "osm"
 
 
 def test_discover_add_creates_restaurant():
@@ -220,3 +241,134 @@ def test_yelp_key_masked_in_settings():
     assert s["yelp_api_key_set"] is True
     assert s["yelp_api_key"] == "********"
     assert "super-secret-key" not in str(s)
+
+
+# ---------- OpenStreetMap / Overpass provider ----------
+
+def _fake_overpass_post_factory(elements):
+    def _post(url, data):
+        assert "overpass" in url
+        return {"elements": elements}
+    return _post
+
+
+OSM_NODE = {
+    "type": "node", "id": 1,
+    "lat": 39.05, "lon": -95.68,
+    "tags": {"amenity": "restaurant", "name": "Test Bistro",
+             "cuisine": "italian;pizza",
+             "addr:housenumber": "123", "addr:street": "Main St"},
+}
+OSM_WAY = {
+    "type": "way", "id": 2,
+    "center": {"lat": 39.06, "lon": -95.67},
+    "tags": {"amenity": "fast_food", "name": "Burger Joint", "cuisine": "burger"},
+}
+OSM_NONAME = {
+    "type": "node", "id": 3, "lat": 39.05, "lon": -95.68,
+    "tags": {"amenity": "restaurant", "cuisine": "mexican"},
+}
+
+
+def test_humanize_cuisine():
+    assert humanize_cuisine("pizza") == "Pizza"
+    assert humanize_cuisine("italian;pizza") == "Italian, Pizza"
+    assert humanize_cuisine("ice_cream") == "Dessert"
+    assert humanize_cuisine("some_new_thing") == "Some New Thing"
+    assert humanize_cuisine("") == ""
+    assert humanize_cuisine(None) == ""
+
+
+def test_haversine_mi_sanity():
+    # ~1 degree of latitude ≈ 69 miles
+    d = haversine_mi(39.0, -95.0, 40.0, -95.0)
+    assert 68 < d < 70
+    assert haversine_mi(39.0, -95.0, 39.0, -95.0) == 0
+
+
+def test_search_overpass_maps_nodes_and_ways():
+    cards = search_overpass(39.05, -95.68, 10,
+                            http_post=_fake_overpass_post_factory([OSM_NODE, OSM_WAY, OSM_NONAME]))
+    assert len(cards) == 2  # unnamed element skipped
+    bistro = cards[0]
+    assert bistro["name"] == "Test Bistro"
+    assert bistro["cuisine"] == "Italian, Pizza"
+    assert bistro["address"] == "123 Main St"
+    assert bistro["distance_mi"] == 0.0
+    assert bistro["rating"] is None
+    assert bistro["price_tier"] == 2
+    assert bistro["osm_id"] == "node/1"
+    joint = cards[1]
+    assert joint["cuisine"] == "Burgers"
+    assert joint["distance_mi"] > 0  # way uses center coords
+
+
+def test_search_overpass_fast_food_fallback_cuisine():
+    el = {"type": "node", "id": 9, "lat": 39.0, "lon": -95.0,
+          "tags": {"amenity": "fast_food", "name": "Quick Stop"}}
+    cards = search_overpass(39.0, -95.0, 5, http_post=_fake_overpass_post_factory([el]))
+    assert cards[0]["cuisine"] == "Fast Food"
+
+
+def test_search_overpass_bad_response_raises():
+    def _bad(url, data):
+        return {"remark": "runtime error"}
+    try:
+        search_overpass(39.0, -95.0, 5, http_post=_bad)
+    except RuntimeError as e:
+        assert "unexpected response" in str(e)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
+def test_search_overpass_timeout_message():
+    def _slow(url, data):
+        raise TimeoutError("timed out")
+    try:
+        search_overpass(39.0, -95.0, 5, http_post=_slow)
+    except RuntimeError as e:
+        assert "timed out" in str(e).lower()
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
+def test_discover_osm_hides_added_and_caches_per_provider():
+    from app.models import Restaurant
+    s = SessionLocal()
+    try:
+        r = Restaurant(name="Test Bistro", cuisine="Italian", price_tier=2)
+        s.add(r)
+        s.commit()
+        els = [OSM_NODE, OSM_WAY]
+        out = discover(s, 39.05, -95.68, 10, api_key=None, refresh=True,
+                       http_post=_fake_overpass_post_factory(els))
+        assert out["provider"] == "osm"
+        names = [b["name"] for b in out["businesses"]]
+        assert "Test Bistro" not in names  # already in list -> hidden
+        assert "Burger Joint" in names
+        # second call hits cache, no HTTP
+        def _boom(url, data):
+            raise AssertionError("should not be called")
+        out2 = discover(s, 39.05, -95.68, 10, api_key=None, http_post=_boom)
+        assert out2["cached"] is True
+        # yelp cache for the same location is a separate key
+        out3 = discover(s, 39.05, -95.68, 10, api_key="k", refresh=True,
+                        http_get=lambda url, key: {"businesses": []})
+        assert out3["provider"] == "yelp"
+        assert out3["cached"] is False
+    finally:
+        s.close()
+
+
+def test_discover_yelp_key_still_wins():
+    import app.discover as disc
+    s = SessionLocal()
+    try:
+        def _nope(*a, **k):
+            raise AssertionError("overpass must not be called with a key")
+        out = disc.discover(s, 39.0, -95.6, 10, api_key="k", refresh=True,
+                            http_get=lambda url, key: {"businesses": []},
+                            http_post=_nope)
+        assert out["provider"] == "yelp"
+    finally:
+        s.close()
