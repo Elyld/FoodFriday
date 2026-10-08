@@ -20,9 +20,22 @@ from app.database import SessionLocal, init_db  # noqa: E402
 from app.deal_scan import set_setting  # noqa: E402
 from app.discover import K_AVOID_REPEAT_CUISINE  # noqa: E402
 from app.main import app  # noqa: E402
+from app.models import Restaurant, Visit  # noqa: E402
 
 init_db()
 client = TestClient(app)
+
+
+def _cleanup_restaurant(rid: int):
+    s = SessionLocal()
+    try:
+        s.query(Visit).filter(Visit.restaurant_id == rid).delete()
+        r = s.get(Restaurant, rid)
+        if r:
+            s.delete(r)
+        s.commit()
+    finally:
+        s.close()
 
 
 def _make(name, cuisine=None, **kw):
@@ -111,26 +124,33 @@ def test_cuisine_rotation_skips_latest_cuisine():
         s.close()
     mex = _make("Rotation Tacos", cuisine="Mexican")
     bbq = _make("Rotation BBQ", cuisine="BBQ")
-    _visit(mex["id"], days_ago=0)  # most recent visit overall: Mexican, today
-    # veto everything else in the (shared) test DB for a deterministic pool
-    veto = [i for i in _all_ids() if i not in (mex["id"], bbq["id"])]
+    try:
+        _visit(mex["id"], days_ago=0)  # most recent visit overall: Mexican, today
+        _visit(bbq["id"], days_ago=30)  # friday mode needs a counted visit
+        # veto everything else in the (shared) test DB for a deterministic pool
+        veto = [i for i in _all_ids() if i not in (mex["id"], bbq["id"])]
 
-    data = client.post("/api/pick", json={"veto_ids": veto}).json()
-    assert data.get("skipped_cuisine") == "Mexican"
-    assert [p["name"] for p in data["picks"]] == ["Rotation BBQ"]
+        data = client.post("/api/pick", json={"veto_ids": veto}).json()
+        assert data.get("skipped_cuisine") == "Mexican"
+        assert [p["name"] for p in data["picks"]] == ["Rotation BBQ"]
+    finally:
+        _cleanup_restaurant(mex["id"])
+        _cleanup_restaurant(bbq["id"])
 
 
 def test_cuisine_override_include_anyway():
-    # veto everyone but the Mexican spot: with the override it must be pickable
-    others = [
-        r["id"] for r in client.get("/api/restaurants").json()
-        if r["name"] != "Rotation Tacos"
-    ]
-    data = client.post(
-        "/api/pick", json={"include_cuisine": True, "veto_ids": others}
-    ).json()
-    assert "skipped_cuisine" not in data
-    assert [p["name"] for p in data["picks"]] == ["Rotation Tacos"]
+    # with the override, the latest-cuisine spot must be pickable
+    r = _make("Override Tacos", cuisine="Mexican")
+    try:
+        _visit(r["id"], days_ago=0)  # latest visit overall: Mexican, today
+        others = [i for i in _all_ids() if i != r["id"]]
+        data = client.post(
+            "/api/pick", json={"include_cuisine": True, "veto_ids": others}
+        ).json()
+        assert "skipped_cuisine" not in data
+        assert [p["name"] for p in data["picks"]] == ["Override Tacos"]
+    finally:
+        _cleanup_restaurant(r["id"])
 
 
 def test_cuisine_rotation_disabled_by_setting():
@@ -149,3 +169,23 @@ def test_cuisine_rotation_disabled_by_setting():
         s.commit()
     finally:
         s.close()
+
+
+def test_friday_and_new_modes_never_mesh():
+    """Friday picks = visited only; 'somewhere new' = zero-visit only.
+    Every restaurant is eligible in exactly one mode."""
+    tried = _make("Meshing Tried", cuisine="Thai")
+    untried = _make("Meshing Untried", cuisine="Thai")
+    try:
+        _visit(tried["id"], days_ago=30)
+        veto = [i for i in _all_ids() if i not in (tried["id"], untried["id"])]
+
+        friday = client.post("/api/pick", json={"mode": "friday", "veto_ids": veto,
+                                                "include_cuisine": True}).json()["picks"]
+        assert [p["name"] for p in friday] == ["Meshing Tried"]
+
+        new = client.post("/api/pick", json={"mode": "new", "veto_ids": veto}).json()["picks"]
+        assert [p["name"] for p in new] == ["Meshing Untried"]
+    finally:
+        _cleanup_restaurant(tried["id"])
+        _cleanup_restaurant(untried["id"])

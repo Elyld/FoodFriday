@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import tempfile
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 TMP = Path(tempfile.mkdtemp(prefix="foodfriday-test-"))
@@ -15,11 +15,26 @@ os.environ.setdefault("FOODFRIDAY_DATA_DIR", str(TMP / "data"))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.database import init_db  # noqa: E402
+from app.database import SessionLocal, init_db  # noqa: E402
 from app.main import app  # noqa: E402
+from app.models import Restaurant, Visit  # noqa: E402
 
 init_db()
 client = TestClient(app)
+
+
+def _cleanup_restaurant(rid: int):
+    """Delete a restaurant and its visits — keeps the shared test DB clean
+    so later files (esp. test_deal_scan's restaurant wipe) can't orphan them."""
+    s = SessionLocal()
+    try:
+        s.query(Visit).filter(Visit.restaurant_id == rid).delete()
+        r = s.get(Restaurant, rid)
+        if r:
+            s.delete(r)
+        s.commit()
+    finally:
+        s.close()
 
 
 def test_health():
@@ -104,30 +119,59 @@ def test_delete_restaurant_cascades_visits():
     assert not any(h["restaurant_name"] == "Doomed Cafe" for h in hist)
 
 
+CUISINES = ["Mexican", "BBQ", "Italian", "Chinese", "Ramen"]
+
+
+def _make_visited(name="Taco Town", days_ago=30, cuisine=None, **kw):
+    """Create a restaurant with one counted visit `days_ago` (friday-mode eligible)."""
+    r = _make(name, cuisine=cuisine or "Mexican", **kw)
+    v = client.post("/api/visits", json={
+        "restaurant_id": r["id"],
+        "visited_at": (date.today() - timedelta(days=days_ago)).isoformat(),
+    })
+    assert v.status_code == 201, v.text
+    return r
+
+
 def test_pick_returns_three_with_reasons():
-    for i in range(5):
-        _make(f"Pick Place {i}")
-    r = client.post("/api/pick", json={"keep_ids": [], "veto_ids": []})
-    assert r.status_code == 200
-    picks = r.json()["picks"]
-    assert len(picks) == 3
-    ids = [p["id"] for p in picks]
-    assert len(set(ids)) == 3
-    for p in picks:
-        assert p["reason"], "each pick needs a reason"
+    ids = []
+    try:
+        for i in range(5):
+            # varied cuisines: the rotation rule skips the latest visit's
+            # cuisine, so a single shared cuisine would empty the pool
+            ids.append(_make_visited(f"Pick Place {i}", cuisine=CUISINES[i])["id"])
+        r = client.post("/api/pick", json={"keep_ids": [], "veto_ids": []})
+        assert r.status_code == 200
+        picks = r.json()["picks"]
+        assert len(picks) == 3
+        ids_out = [p["id"] for p in picks]
+        assert len(set(ids_out)) == 3
+        for p in picks:
+            assert p["reason"], "each pick needs a reason"
+    finally:
+        for rid in ids:
+            _cleanup_restaurant(rid)
 
 
 def test_pick_veto_replaces_one_card():
-    r = client.post("/api/pick", json={})
-    first = r.json()["picks"]
-    assert len(first) == 3
-    veto_id = first[0]["id"]
-    keep = [p["id"] for p in first[1:]]
-    r2 = client.post("/api/pick", json={"keep_ids": keep, "veto_ids": [veto_id]})
-    second = r2.json()["picks"]
-    ids = [p["id"] for p in second]
-    assert veto_id not in ids
-    assert all(k in ids for k in keep)
+    mine = []
+    try:
+        for i in range(4):
+            mine.append(_make_visited(f"Veto Place {i}", cuisine=CUISINES[i])["id"])
+        others = [x["id"] for x in client.get("/api/restaurants").json() if x["id"] not in mine]
+        r = client.post("/api/pick", json={"keep_ids": [], "veto_ids": others})
+        first = r.json()["picks"]
+        assert len(first) == 3
+        veto_id = first[0]["id"]
+        keep = [p["id"] for p in first[1:]]
+        r2 = client.post("/api/pick", json={"keep_ids": keep, "veto_ids": [veto_id] + others})
+        second = r2.json()["picks"]
+        ids = [p["id"] for p in second]
+        assert veto_id not in ids
+        assert all(k in ids for k in keep)
+    finally:
+        for rid in mine:
+            _cleanup_restaurant(rid)
 
 
 def test_pick_excludes_recent_visit():

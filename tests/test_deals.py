@@ -15,8 +15,9 @@ os.environ.setdefault("FOODFRIDAY_DATA_DIR", str(TMP / "data"))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.database import init_db  # noqa: E402
+from app.database import SessionLocal, init_db  # noqa: E402
 from app.main import app  # noqa: E402
+from app.models import Restaurant, Visit  # noqa: E402
 from app.picker import (  # noqa: E402
     DEAL_BOOST,
     DEAL_ITEM_BOOST,
@@ -28,6 +29,18 @@ TODAY = date(2026, 10, 7)
 
 init_db()
 client = TestClient(app)
+
+
+def _cleanup_restaurant(rid: int):
+    s = SessionLocal()
+    try:
+        s.query(Visit).filter(Visit.restaurant_id == rid).delete()
+        r = s.get(Restaurant, rid)
+        if r:
+            s.delete(r)
+        s.commit()
+    finally:
+        s.close()
 
 
 def _deal(**kw):
@@ -150,19 +163,28 @@ def test_deal_validation():
 
 def test_pick_badge_shows_deal_title():
     r = _restaurant("Badge Bistro")
-    client.post("/api/deals", json={
-        "restaurant_id": r["id"], "title": "BOGO Burgers",
-        "valid_from": "2026-10-01", "valid_until": "2026-10-31",
-    })
-    picks = client.post("/api/pick", json={}).json()["picks"]
-    # with few restaurants, Badge Bistro should appear in 30 tries
-    titles = []
-    for _ in range(30):
-        for p in client.post("/api/pick", json={}).json()["picks"]:
-            if p["name"] == "Badge Bistro":
-                titles.extend(p["deal_titles"])
-    assert picks  # sanity
-    assert "BOGO Burgers" in titles
+    try:
+        # friday mode only draws visited restaurants — give it a counted visit
+        v = client.post("/api/visits", json={
+            "restaurant_id": r["id"],
+            "visited_at": (date.today() - timedelta(days=30)).isoformat(),
+        })
+        assert v.status_code == 201, v.text
+        client.post("/api/deals", json={
+            "restaurant_id": r["id"], "title": "BOGO Burgers",
+            "valid_from": "2026-10-01", "valid_until": "2026-10-31",
+        })
+        picks = client.post("/api/pick", json={}).json()["picks"]
+        # with few restaurants, Badge Bistro should appear in 30 tries
+        titles = []
+        for _ in range(30):
+            for p in client.post("/api/pick", json={}).json()["picks"]:
+                if p["name"] == "Badge Bistro":
+                    titles.extend(p["deal_titles"])
+        assert picks  # sanity
+        assert "BOGO Burgers" in titles
+    finally:
+        _cleanup_restaurant(r["id"])
 
 
 def test_chain_wide_deal_does_not_boost():

@@ -79,7 +79,7 @@ async function fetchPicks(keep, veto) {
       if (pickMode === 'new') {
         area.innerHTML = '<div class="empty">No untried places — <a href="/discover">hit Discover</a> to add some.</div>';
       } else {
-        area.innerHTML = '<div class="empty">No restaurants yet. <a href="/restaurants">Add some</a> and spin again.</div>';
+        area.innerHTML = '<div class="empty">Nothing you\'ve been to yet — log a visit, or try <b>✨ Somewhere new</b> above.</div>';
       }
       return;
     }

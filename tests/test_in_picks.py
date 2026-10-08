@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from datetime import date, timedelta
 from pathlib import Path
 
 TMP = Path(tempfile.mkdtemp(prefix="ff-picks-"))
@@ -14,11 +15,24 @@ os.environ.setdefault("FOODFRIDAY_DATA_DIR", str(TMP / "data"))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.database import init_db  # noqa: E402
+from app.database import SessionLocal, init_db  # noqa: E402
 from app.main import app  # noqa: E402
+from app.models import Restaurant, Visit  # noqa: E402
 
 init_db()
 client = TestClient(app)
+
+
+def _cleanup_restaurant(rid: int):
+    s = SessionLocal()
+    try:
+        s.query(Visit).filter(Visit.restaurant_id == rid).delete()
+        r = s.get(Restaurant, rid)
+        if r:
+            s.delete(r)
+        s.commit()
+    finally:
+        s.close()
 
 
 def _make(name: str) -> dict:
@@ -51,16 +65,26 @@ def test_create_with_toggle_false():
 def test_excluded_restaurant_never_picked():
     a = _make("Always In")
     b = _make("Never Picked")
-    client.post(f"/api/restaurants/{b['id']}/in-picks")  # exclude b
+    try:
+        # friday mode only draws visited restaurants — give it a counted visit
+        v = client.post("/api/visits", json={
+            "restaurant_id": a["id"],
+            "visited_at": (date.today() - timedelta(days=30)).isoformat(),
+        })
+        assert v.status_code == 201, v.text
+        client.post(f"/api/restaurants/{b['id']}/in-picks")  # exclude b
 
-    seen = set()
-    for _ in range(30):
-        r = client.post("/api/pick", json={})
-        assert r.status_code == 200
-        for p in r.json()["picks"]:
-            seen.add(p["name"])
-    assert "Never Picked" not in seen
-    assert "Always In" in seen or "Skip Me" in seen  # others still eligible
+        seen = set()
+        for _ in range(30):
+            r = client.post("/api/pick", json={})
+            assert r.status_code == 200
+            for p in r.json()["picks"]:
+                seen.add(p["name"])
+        assert "Never Picked" not in seen
+        assert "Always In" in seen  # the one visited, eligible restaurant
+    finally:
+        _cleanup_restaurant(a["id"])
+        _cleanup_restaurant(b["id"])
 
 
 def test_restaurants_page_shows_skip_marker():

@@ -405,8 +405,11 @@ def build_pick_response(session: Session, mode: str = "friday",
     """Shared pick builder for /api/pick and the Friday Discord nudge.
 
     mode="new": only restaurants with zero visits ("somewhere new").
-    Otherwise the normal weighted Friday draw, optionally excluding the
-    cuisine of the most recent logged visit (avoid_repeat_cuisine setting).
+    Otherwise the normal weighted Friday draw over restaurants with at
+    least one counted visit — untried spots never appear here, so the two
+    modes never mesh: every restaurant is eligible in exactly one.
+    Optionally excludes the cuisine of the most recent logged visit
+    (avoid_repeat_cuisine setting).
 
     All picker inputs (visit counts, last-visit dates, deal item matching,
     cuisine rotation) consider only visits that count toward picks —
@@ -459,7 +462,9 @@ def build_pick_response(session: Session, mode: str = "friday",
             "favorite": bool(r.favorite),
         }
         for r in restaurants
-        if r.include_in_picks is not False
+        # Friday mode is "places we've been" only — untried spots live in
+        # "new" mode. No meshing: each restaurant is eligible in exactly one.
+        if r.include_in_picks is not False and counts.get(r.id, 0) > 0
     ]
 
     # Cuisine rotation: skip the cuisine of the most recent COUNTED visit
