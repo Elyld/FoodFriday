@@ -389,3 +389,32 @@ def test_settings_receipt_fields_roundtrip():
     assert "receipt_scan_last_result" in body
     r = client.put("/api/settings", json={"receipt_scan_enabled": True})
     assert r.json()["receipt_scan_enabled"] is True
+
+
+def test_store_receipts_skips_seed_imported_pair():
+    """A receipt whose (restaurant, date) was already logged via seed import
+    (non-gmail external_id) must not be duplicated by the auto-scan."""
+    from datetime import date as _date
+
+    s = _session_with_creds()
+    try:
+        r = Restaurant(name="SeedDup Test", cuisine="Mexican", price_tier=2,
+                       favorite=False, include_in_picks=True, track_visits=True)
+        s.add(r)
+        s.flush()
+        s.add(Visit(restaurant_id=r.id, visited_at=_date(2026, 10, 5), total=13.12,
+                    source="import", external_id="chipotle:2026-10-05:0"))
+        s.commit()
+        receipts = [{
+            "chain": "SeedDup Test",
+            "msgid": "seeddup1@mail",
+            "sent": _date(2026, 10, 5),
+            "total": 13.12,
+            "items": [],
+        }]
+        added, _ = store_receipts(s, receipts)
+        s.commit()
+        assert added == 0
+        assert s.query(Visit).filter(Visit.restaurant_id == r.id).count() == 1
+    finally:
+        s.close()

@@ -371,7 +371,9 @@ def store_receipts(session: Session, receipts: list[dict]) -> tuple[int, int]:
     """Insert parsed receipts as visits with dedupe + auto-create restaurants.
 
     Restaurants with track_visits=False are skipped entirely (the McDonald's /
-    kid-orders skip list). Dedupes on external_id ("gmail:<message-id>").
+    kid-orders skip list). Dedupes on external_id ("gmail:<message-id>") AND on
+    (restaurant, date) — the seed import uses non-gmail external_ids, so without
+    the pair guard recent seed visits would be duplicated by the first scan.
     Confirmation-only emails (no parseable total) are logged with total=None.
 
     Returns (visits_added, restaurants_added).
@@ -382,6 +384,12 @@ def store_receipts(session: Session, receipts: list[dict]) -> tuple[int, int]:
     existing_ext = {
         v.external_id
         for v in session.query(Visit).filter(Visit.external_id.isnot(None)).all()
+    }
+    # Pair guard: the seed import uses non-gmail external_ids ("chipotle:2026-10-03:0"),
+    # so a scan must also skip a receipt whose restaurant+date is already logged —
+    # otherwise recent seed visits get duplicated on the first auto-scan.
+    existing_pairs = {
+        (v.restaurant_id, v.visited_at.isoformat()) for v in session.query(Visit).all()
     }
 
     for rc in receipts:
@@ -408,6 +416,8 @@ def store_receipts(session: Session, receipts: list[dict]) -> tuple[int, int]:
             restaurants_added += 1
         if r.track_visits is False:
             continue  # skip-listed (e.g. kid's McDonald's runs) — no visit, no noise
+        if (r.id, rc["sent"].isoformat()) in existing_pairs:
+            continue  # already logged (e.g. via seed import with a non-gmail external_id)
         items = rc.get("items") or []
         session.add(
             Visit(
@@ -420,6 +430,7 @@ def store_receipts(session: Session, receipts: list[dict]) -> tuple[int, int]:
             )
         )
         existing_ext.add(ext_id)
+        existing_pairs.add((r.id, rc["sent"].isoformat()))
         visits_added += 1
     return visits_added, restaurants_added
 
