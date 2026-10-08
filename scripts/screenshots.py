@@ -72,6 +72,14 @@ def seed():
         "gmail_app_password": "abcd efgh ijkl mnop",
         "deal_scan_enabled": True,
         "deal_scan_time": "07:00",
+        # discover + nudge demo config (fake key/webhook, never real)
+        "yelp_api_key": "demo-yelp-key",
+        "home_lat": "39.0483",
+        "home_lon": "-95.6780",
+        "discord_webhook_url": "https://discord.com/api/webhooks/demo/demo",
+        "friday_nudge_enabled": True,
+        "friday_nudge_time": "10:00",
+        "avoid_repeat_cuisine": True,
     })
     from app.database import SessionLocal
     from app.models import Setting
@@ -79,7 +87,25 @@ def seed():
     try:
         s.merge(Setting(key="deal_scan_last_run", value="2026-10-07T07:00"))
         s.merge(Setting(key="deal_scan_last_result", value="2 new deals (1 new restaurant added)"))
+        s.merge(Setting(key="friday_nudge_last_result", value="sent (2026-10-08T10:00)"))
         s.commit()
+    finally:
+        s.close()
+    # prime the discover cache so the screenshot needs no live Yelp call
+    from app.discover import store_cache
+    s = SessionLocal()
+    try:
+        store_cache(s, 39.048, -95.678, 10.0, [
+            {"yelp_id": "d1", "name": "The Rustic Spoon", "rating": 4.6,
+             "price_tier": 2, "price_label": "$$", "cuisine": "American, Brunch",
+             "address": "1200 SW Topeka Blvd", "distance_mi": 1.2},
+            {"yelp_id": "d2", "name": "Pho Saigon", "rating": 4.8,
+             "price_tier": 1, "price_label": "$", "cuisine": "Vietnamese, Pho",
+             "address": "2815 SW 29th St", "distance_mi": 2.4},
+            {"yelp_id": "d3", "name": "El Camino Real", "rating": 4.2,
+             "price_tier": 1, "price_label": "$", "cuisine": "Mexican, Tacos",
+             "address": "3420 SW Topeka Blvd", "distance_mi": 3.1},
+        ])
     finally:
         s.close()
     return ids
@@ -142,6 +168,26 @@ def main():
             mob.click("#pick-btn")
             mob.wait_for_timeout(900)
             mob.screenshot(path=str(out / "mobile-home.png"))
+
+            # somewhere-new mode
+            page.goto("http://127.0.0.1:4002/", wait_until="networkidle")
+            page.click("#mode-new")
+            page.wait_for_timeout(300)
+            page.click("#pick-btn")
+            page.wait_for_timeout(900)
+            page.screenshot(path=str(out / "home-new-mode.png"))
+
+            # discover page (served from the primed cache — no live Yelp call)
+            page.goto("http://127.0.0.1:4002/discover", wait_until="networkidle")
+            page.wait_for_timeout(600)
+            page.click("text=🔍 Search nearby")
+            page.wait_for_timeout(900)
+            page.screenshot(path=str(out / "discover.png"))
+
+            # spending dashboard
+            page.goto("http://127.0.0.1:4002/spending", wait_until="networkidle")
+            page.wait_for_timeout(400)
+            page.screenshot(path=str(out / "spending.png"))
 
             page.goto("http://127.0.0.1:4002/settings", wait_until="networkidle")
             page.wait_for_timeout(400)

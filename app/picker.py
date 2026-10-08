@@ -99,6 +99,25 @@ def reason_for(pick: dict[str, Any]) -> str:
     return "In the rotation"
 
 
+def newcomer_stats(restaurants: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Stats for "somewhere new" mode: only restaurants with zero visits.
+
+    Weight is uniform-ish, with a gentle tiebreak from the stored Yelp rating
+    (a 5-star spot gets 1.5x a no-rating one — discovery, not dominance).
+    Each restaurant dict needs: id, name, cuisine, price_tier, favorite,
+    yelp_rating (optional).
+    """
+    out = []
+    for r in restaurants:
+        rating = r.get("yelp_rating")
+        weight = 1.0 + (float(rating) / 10.0) if rating else 1.0
+        out.append(
+            {**r, "last_visit": None, "days_since": None, "weight": weight,
+             "deal_titles": [], "reason": "Never tried"}
+        )
+    return out
+
+
 def pick_three(
     stats: list[dict[str, Any]],
     keep_ids: tuple[int, ...] = (),

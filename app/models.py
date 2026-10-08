@@ -27,6 +27,12 @@ class Restaurant(Base):
     include_in_picks: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="1"
     )
+    yelp_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )  # Yelp business id, set when added from Discover
+    yelp_rating: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )  # Yelp star rating (1-5), used as a tiebreak in "somewhere new" mode
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     visits: Mapped[list["Visit"]] = relationship(
@@ -90,3 +96,20 @@ class Setting(Base):
     key: Mapped[str] = mapped_column(String(120), primary_key=True)
     value: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class DiscoverCache(Base):
+    """Cached Yelp nearby-search results — keyed by rounded location + radius.
+
+    Yelp's free Starter plan is ~150 calls/day, so repeat views of the same
+    search are served from here for CACHE_TTL_HOURS instead of hitting the API.
+    """
+
+    __tablename__ = "discover_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lat: Mapped[float] = mapped_column(Float, nullable=False)  # rounded to 3 decimals
+    lon: Mapped[float] = mapped_column(Float, nullable=False)  # rounded to 3 decimals
+    radius_km: Mapped[float] = mapped_column(Float, nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)  # JSON: list of business dicts
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

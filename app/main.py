@@ -17,7 +17,22 @@ from sqlalchemy.orm import Session
 
 from app import pages, picker
 from app.database import get_session, init_db
+from app.discover import (
+    K_AVOID_REPEAT_CUISINE,
+    K_HOME_LAT,
+    K_HOME_LON,
+    K_YELP_KEY,
+    discover as discover_nearby,
+    norm_name as discover_norm,
+)
 from app.models import Deal, Restaurant, Setting, Visit
+from app.nudge import (
+    K_NUDGE_ENABLED,
+    K_NUDGE_LAST_RESULT,
+    K_NUDGE_TIME,
+    K_WEBHOOK,
+    send_nudge as send_discord_nudge,
+)
 from app.version import APP_NAME, VERSION
 from app import scheduler as deal_scheduler
 from app.deal_scan import (
@@ -128,6 +143,16 @@ def history_page(session: Session = Depends(get_session)):
 @app.get("/import", response_class=HTMLResponse)
 def import_page():
     return pages.import_page()
+
+
+@app.get("/discover", response_class=HTMLResponse)
+def discover_page():
+    return pages.discover_page()
+
+
+@app.get("/spending", response_class=HTMLResponse)
+def spending_page(session: Session = Depends(get_session)):
+    return pages.spending_page(spending_aggregates(session))
 
 
 @app.get("/settings", response_class=HTMLResponse)
@@ -285,6 +310,136 @@ def delete_visit(vid: int, session: Session = Depends(get_session)):
 class PickIn(BaseModel):
     keep_ids: list[int] = []
     veto_ids: list[int] = []
+    mode: str = "friday"          # "friday" | "new"
+    include_cuisine: bool = False  # override the avoid-repeat-cuisine exclusion
+
+
+def build_pick_response(session: Session, mode: str = "friday",
+                        keep_ids: tuple[int, ...] = (),
+                        veto_ids: tuple[int, ...] = (),
+                        include_cuisine: bool = False) -> dict:
+    """Shared pick builder for /api/pick and the Friday Discord nudge.
+
+    mode="new": only restaurants with zero visits ("somewhere new").
+    Otherwise the normal weighted Friday draw, optionally excluding the
+    cuisine of the most recent logged visit (avoid_repeat_cuisine setting).
+    """
+    counts, lasts = visit_stats(session)
+    restaurants = session.query(Restaurant).all()
+    today = date.today()
+
+    if mode == "new":
+        dicts = [
+            {
+                "id": r.id,
+                "name": r.name,
+                "cuisine": r.cuisine,
+                "price_tier": r.price_tier or 2,
+                "favorite": bool(r.favorite),
+                "yelp_rating": r.yelp_rating,
+            }
+            for r in restaurants
+            if r.include_in_picks is not False and counts.get(r.id, 0) == 0
+        ]
+        stats = picker.newcomer_stats(dicts)
+        picks = picker.pick_three(stats, keep_ids, veto_ids)
+        return {
+            "mode": "new",
+            "picks": [
+                {
+                    "id": p["id"],
+                    "name": p["name"],
+                    "cuisine": p["cuisine"],
+                    "price_tier": p["price_tier"],
+                    "favorite": p["favorite"],
+                    "last_visit": None,
+                    "reason": "Never tried",
+                    "deal_titles": [],
+                }
+                for p in picks
+            ],
+        }
+
+    dicts = [
+        {
+            "id": r.id,
+            "name": r.name,
+            "cuisine": r.cuisine,
+            "price_tier": r.price_tier or 2,
+            "favorite": bool(r.favorite),
+        }
+        for r in restaurants
+        if r.include_in_picks is not False
+    ]
+
+    # Cuisine rotation: skip the cuisine of the most recent logged visit.
+    skipped_cuisine: str | None = None
+    if get_setting(session, K_AVOID_REPEAT_CUISINE, "1") == "1" and not include_cuisine:
+        latest = (
+            session.query(Visit)
+            .order_by(Visit.visited_at.desc(), Visit.id.desc())
+            .first()
+        )
+        if latest and latest.restaurant and (latest.restaurant.cuisine or "").strip():
+            skipped_cuisine = latest.restaurant.cuisine.strip()
+            skip_norm = discover_norm(skipped_cuisine)
+            dicts = [d for d in dicts if discover_norm(d["cuisine"]) != skip_norm]
+
+    last_by_id = {rid: d for rid, d in lasts.items()}
+
+    deals_by_id: dict[int, list[dict]] = {}
+    for d in session.query(Deal).all():
+        dd = {
+            "title": d.title,
+            "valid_from": d.valid_from,
+            "valid_until": d.valid_until,
+            "created_at": d.created_at,
+            "item_keywords": d.item_keywords,
+        }
+        if d.restaurant_id is not None and picker.is_deal_active(dd, today):
+            deals_by_id.setdefault(d.restaurant_id, []).append(dd)
+
+    items_by_id: dict[int, list[str]] = {}
+    for v in session.query(Visit).filter(Visit.items.isnot(None)).all():
+        items_by_id.setdefault(v.restaurant_id, []).extend(
+            [i.strip() for i in (v.items or "").splitlines() if i.strip()]
+        )
+
+    stats = picker.candidate_stats(dicts, last_by_id, today=today,
+                                   deals_by_id=deals_by_id, items_by_id=items_by_id)
+    picks = picker.pick_three(stats, keep_ids, veto_ids)
+    out = {
+        "mode": "friday",
+        "picks": [
+            {
+                "id": p["id"],
+                "name": p["name"],
+                "cuisine": p["cuisine"],
+                "price_tier": p["price_tier"],
+                "favorite": p["favorite"],
+                "last_visit": p["last_visit"].isoformat() if p["last_visit"] else None,
+                "reason": p["reason"],
+                "deal_titles": p.get("deal_titles", []),
+            }
+            for p in picks
+        ],
+    }
+    if skipped_cuisine:
+        out["skipped_cuisine"] = skipped_cuisine
+    return out
+
+
+@app.post("/api/pick")
+def pick(payload: PickIn, session: Session = Depends(get_session)):
+    if payload.mode not in ("friday", "new"):
+        raise HTTPException(400, 'mode must be "friday" or "new"')
+    return build_pick_response(
+        session,
+        mode=payload.mode,
+        keep_ids=tuple(payload.keep_ids),
+        veto_ids=tuple(payload.veto_ids),
+        include_cuisine=payload.include_cuisine,
+    )
 
 
 # ---------- deals ----------
@@ -396,67 +551,14 @@ def delete_deal(did: int, session: Session = Depends(get_session)):
     return None
 
 
-@app.post("/api/pick")
-def pick(payload: PickIn, session: Session = Depends(get_session)):
-    counts, lasts = visit_stats(session)
-    restaurants = session.query(Restaurant).all()
-    dicts = [
-        {
-            "id": r.id,
-            "name": r.name,
-            "cuisine": r.cuisine,
-            "price_tier": r.price_tier or 2,
-            "favorite": bool(r.favorite),
-        }
-        for r in restaurants
-        if r.include_in_picks is not False
-    ]
-    last_by_id = {rid: d for rid, d in lasts.items()}
-
-    today = date.today()
-    deals_by_id: dict[int, list[dict]] = {}
-    for d in session.query(Deal).all():
-        dd = {
-            "title": d.title,
-            "valid_from": d.valid_from,
-            "valid_until": d.valid_until,
-            "created_at": d.created_at,
-            "item_keywords": d.item_keywords,
-        }
-        if d.restaurant_id is not None and picker.is_deal_active(dd, today):
-            deals_by_id.setdefault(d.restaurant_id, []).append(dd)
-
-    items_by_id: dict[int, list[str]] = {}
-    for v in session.query(Visit).filter(Visit.items.isnot(None)).all():
-        items_by_id.setdefault(v.restaurant_id, []).extend(
-            [i.strip() for i in (v.items or "").splitlines() if i.strip()]
-        )
-
-    stats = picker.candidate_stats(dicts, last_by_id, today=today,
-                                   deals_by_id=deals_by_id, items_by_id=items_by_id)
-    picks = picker.pick_three(stats, tuple(payload.keep_ids), tuple(payload.veto_ids))
-    return {
-        "picks": [
-            {
-                "id": p["id"],
-                "name": p["name"],
-                "cuisine": p["cuisine"],
-                "price_tier": p["price_tier"],
-                "favorite": p["favorite"],
-                "last_visit": p["last_visit"].isoformat() if p["last_visit"] else None,
-                "reason": p["reason"],
-                "deal_titles": p.get("deal_titles", []),
-            }
-            for p in picks
-        ]
-    }
-
 
 # ---------- settings (deal scanner) ----------
 
 def settings_view(session: Session) -> dict:
-    """Settings for display/API — the app password is never returned."""
+    """Settings for display/API — secrets are never returned."""
     pw = get_setting(session, K_PASSWORD)
+    yelp_key = get_setting(session, K_YELP_KEY)
+    webhook = get_setting(session, K_WEBHOOK)
     return {
         "gmail_address": get_setting(session, K_ADDRESS) or "",
         "gmail_app_password_set": bool(pw),
@@ -467,6 +569,19 @@ def settings_view(session: Session) -> dict:
         "deal_scan_last_result": get_setting(session, K_LAST_RESULT),
         "deal_scan_status": get_setting(session, K_STATUS, "idle") or "idle",
         "configured": scan_enabled(session),
+        # discover
+        "yelp_api_key_set": bool(yelp_key),
+        "yelp_api_key": MASKED if yelp_key else "",
+        "home_lat": get_setting(session, K_HOME_LAT) or "",
+        "home_lon": get_setting(session, K_HOME_LON) or "",
+        # friday nudge
+        "discord_webhook_set": bool(webhook),
+        "discord_webhook_url": MASKED if webhook else "",
+        "friday_nudge_enabled": get_setting(session, K_NUDGE_ENABLED, "0") == "1",
+        "friday_nudge_time": get_setting(session, K_NUDGE_TIME, "10:00") or "10:00",
+        "friday_nudge_last_result": get_setting(session, K_NUDGE_LAST_RESULT),
+        # picker
+        "avoid_repeat_cuisine": get_setting(session, K_AVOID_REPEAT_CUISINE, "1") == "1",
     }
 
 
@@ -475,6 +590,25 @@ class SettingsIn(BaseModel):
     gmail_app_password: str | None = None  # write-only; ignored when empty/masked
     deal_scan_enabled: bool | None = None
     deal_scan_time: str | None = None  # "HH:MM"
+    yelp_api_key: str | None = None  # write-only; ignored when empty/masked
+    home_lat: str | None = None
+    home_lon: str | None = None
+    discord_webhook_url: str | None = None  # write-only; ignored when empty/masked
+    friday_nudge_enabled: bool | None = None
+    friday_nudge_time: str | None = None  # "HH:MM"
+    avoid_repeat_cuisine: bool | None = None
+
+
+def _validate_hhmm(value: str, label: str) -> str:
+    import re
+
+    t = value.strip()
+    if not re.fullmatch(r"\d{1,2}:\d{2}", t):
+        raise HTTPException(400, f"{label} must be HH:MM (24h)")
+    h, m = int(t.split(":")[0]), int(t.split(":")[1])
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        raise HTTPException(400, f"{label} must be a real time of day")
+    return f"{h:02d}:{m:02d}"
 
 
 @app.get("/api/settings")
@@ -491,17 +625,29 @@ def update_settings(payload: SettingsIn, session: Session = Depends(get_session)
     if payload.deal_scan_enabled is not None:
         set_setting(session, K_ENABLED, "1" if payload.deal_scan_enabled else "0")
     if payload.deal_scan_time is not None:
-        t = payload.deal_scan_time.strip()
-        import re
-
-        if not re.fullmatch(r"\d{1,2}:\d{2}", t):
-            raise HTTPException(400, 'Scan time must be HH:MM (24h)')
-        h, m = int(t.split(":")[0]), int(t.split(":")[1])
-        if not (0 <= h <= 23 and 0 <= m <= 59):
-            raise HTTPException(400, "Scan time must be a real time of day")
-        set_setting(session, K_TIME, f"{h:02d}:{m:02d}")
+        set_setting(session, K_TIME, _validate_hhmm(payload.deal_scan_time, "Scan time"))
+    # discover
+    if payload.yelp_api_key and payload.yelp_api_key != MASKED:
+        set_setting(session, K_YELP_KEY, payload.yelp_api_key.strip() or None)
+    if payload.home_lat is not None:
+        lat = _parse_float(payload.home_lat)
+        set_setting(session, K_HOME_LAT, None if lat is None else str(lat))
+    if payload.home_lon is not None:
+        lon = _parse_float(payload.home_lon)
+        set_setting(session, K_HOME_LON, None if lon is None else str(lon))
+    # friday nudge
+    if payload.discord_webhook_url and payload.discord_webhook_url != MASKED:
+        set_setting(session, K_WEBHOOK, payload.discord_webhook_url.strip() or None)
+    if payload.friday_nudge_enabled is not None:
+        set_setting(session, K_NUDGE_ENABLED, "1" if payload.friday_nudge_enabled else "0")
+    if payload.friday_nudge_time is not None:
+        set_setting(session, K_NUDGE_TIME, _validate_hhmm(payload.friday_nudge_time, "Nudge time"))
+    # picker
+    if payload.avoid_repeat_cuisine is not None:
+        set_setting(session, K_AVOID_REPEAT_CUISINE, "1" if payload.avoid_repeat_cuisine else "0")
     session.commit()
     deal_scheduler.schedule_from_settings()
+    deal_scheduler.schedule_nudge_from_settings()
     return settings_view(session)
 
 
@@ -513,6 +659,25 @@ def clear_gmail(session: Session = Depends(get_session)):
     session.commit()
     deal_scheduler.schedule_from_settings()
     return settings_view(session)
+
+
+@app.post("/api/settings/clear-integrations")
+def clear_integrations(session: Session = Depends(get_session)):
+    """Forget the stored Yelp key and Discord webhook entirely."""
+    set_setting(session, K_YELP_KEY, None)
+    set_setting(session, K_WEBHOOK, None)
+    session.commit()
+    deal_scheduler.schedule_nudge_from_settings()
+    return settings_view(session)
+
+
+@app.post("/api/settings/test-nudge")
+def test_nudge(session: Session = Depends(get_session)):
+    """Send a test Friday-nudge message to the Discord webhook."""
+    result = send_discord_nudge(session, test=True)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error", "nudge failed"))
+    return {"ok": True, "result": result}
 
 
 @app.post("/api/deals/scan", status_code=202)
@@ -532,6 +697,147 @@ def scan_deals_now():
     if not started:
         raise HTTPException(409, "a scan is already running")
     return {"status": "started"}
+
+
+# ---------- discover (Yelp nearby) ----------
+
+def _parse_float(value: str | None) -> float | None:
+    try:
+        return float(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+@app.get("/api/discover")
+def api_discover(radius_km: float = 10.0, refresh: bool = False,
+                session: Session = Depends(get_session)):
+    """Nearby restaurants from Yelp, hiding ones already in the list.
+
+    Results are cached 24h per location+radius so the free Yelp quota isn't
+    burned by repeat views. `refresh=true` forces a live call.
+    """
+    api_key = get_setting(session, K_YELP_KEY)
+    if not api_key:
+        raise HTTPException(400, "Yelp not configured — add your API key in Settings.")
+    lat = _parse_float(get_setting(session, K_HOME_LAT))
+    lon = _parse_float(get_setting(session, K_HOME_LON))
+    if lat is None or lon is None:
+        raise HTTPException(400, "Home location not set — add it in Settings.")
+    radius_km = min(max(radius_km or 10.0, 1.0), 40.0)
+    try:
+        return discover_nearby(session, lat, lon, radius_km, api_key, refresh=refresh)
+    except Exception as exc:
+        logger.warning("yelp discover failed: %s", exc)
+        raise HTTPException(502, f"Yelp search failed: {exc}")
+
+
+class DiscoverAddIn(BaseModel):
+    yelp_id: str | None = None
+    name: str
+    cuisine: str | None = None
+    price_tier: int | None = 2
+    address: str | None = None
+    rating: float | None = None
+
+
+@app.post("/api/discover/add", status_code=201)
+def api_discover_add(payload: DiscoverAddIn, session: Session = Depends(get_session)):
+    """Add a Yelp business to the restaurant list. Idempotent by name."""
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(400, "Name is required")
+    key = discover_norm(name)
+    for r in session.query(Restaurant).all():
+        if discover_norm(r.name) == key:
+            counts, lasts = visit_stats(session)
+            return {"already": True, **restaurant_dict(r, counts.get(r.id, 0), lasts.get(r.id))}
+    tier = payload.price_tier if payload.price_tier in (1, 2, 3) else 2
+    rating = None
+    try:
+        rating = float(payload.rating) if payload.rating is not None else None
+        if rating is not None and not (0 <= rating <= 5):
+            rating = None
+    except (TypeError, ValueError):
+        rating = None
+    r = Restaurant(
+        name=name,
+        cuisine=(payload.cuisine or "").strip() or None,
+        price_tier=tier,
+        notes=None,
+        address=(payload.address or "").strip() or None,
+        favorite=False,
+        include_in_picks=True,
+        yelp_id=(payload.yelp_id or "").strip() or None,
+        yelp_rating=rating,
+    )
+    session.add(r)
+    session.commit()
+    session.refresh(r)
+    return {"already": False, **restaurant_dict(r, 0, None)}
+
+
+# ---------- spending ----------
+
+def spending_aggregates(session: Session) -> dict:
+    """Spend stats for the /spending page. Visits without totals are excluded
+    from the math (and counted separately)."""
+    visits = (
+        session.query(Visit)
+        .order_by(Visit.visited_at.desc())
+        .all()
+    )
+    with_totals = [v for v in visits if v.total is not None]
+    without = len(visits) - len(with_totals)
+
+    total = round(sum(v.total for v in with_totals), 2)
+    avg = round(total / len(with_totals), 2) if with_totals else 0.0
+
+    # monthly buckets, last 6 full-ish months (by calendar month)
+    months: dict[str, float] = {}
+    for v in with_totals:
+        key = v.visited_at.strftime("%Y-%m")
+        months[key] = months.get(key, 0.0) + v.total
+    month_keys = sorted(months.keys())[-6:]
+    monthly = [
+        {
+            "label": date.fromisoformat(k + "-01").strftime("%b %Y"),
+            "total": round(months[k], 2),
+        }
+        for k in month_keys
+    ]
+    max_month = max((m["total"] for m in monthly), default=0.0)
+
+    # per-restaurant top 10
+    by_rest: dict[str, float] = {}
+    by_rest_count: dict[str, int] = {}
+    for v in with_totals:
+        name = v.restaurant.name if v.restaurant else "?"
+        by_rest[name] = by_rest.get(name, 0.0) + v.total
+        by_rest_count[name] = by_rest_count.get(name, 0) + 1
+    top_restaurants = sorted(by_rest.items(), key=lambda kv: -kv[1])[:10]
+
+    # by cuisine
+    by_cuisine: dict[str, float] = {}
+    for v in with_totals:
+        c = (v.restaurant.cuisine if v.restaurant and v.restaurant.cuisine else "Other").strip()
+        by_cuisine[c] = by_cuisine.get(c, 0.0) + v.total
+    cuisines = sorted(by_cuisine.items(), key=lambda kv: -kv[1])
+    max_cuisine = max((t for _, t in cuisines), default=0.0)
+
+    return {
+        "total": total,
+        "average": avg,
+        "visit_count": len(with_totals),
+        "without_totals": without,
+        "monthly": monthly,
+        "max_month": max_month,
+        "top_restaurants": [
+            {"name": n, "total": round(t, 2), "visits": by_rest_count[n]}
+            for n, t in top_restaurants
+        ],
+        "cuisines": [{"name": n, "total": round(t, 2)} for n, t in cuisines],
+        "max_cuisine": max_cuisine,
+    }
 
 # ---------- import ----------
 

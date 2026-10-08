@@ -234,19 +234,22 @@ def store_deals(session: Session, deals: list[dict]) -> tuple[int, int]:
     return deals_added, restaurants_added
 
 
-def run_scan(session: Session, imap_class=imaplib.IMAP4_SSL) -> dict:
+def run_scan(session: Session, imap_class=imaplib.IMAP4_SSL,
+             today: date | None = None) -> dict:
     """Full scan: fetch promos over IMAP, store new deals, record the result.
 
     Never raises for scan-time failures (bad creds, stalled connection, parse
     errors): those are recorded into the last-result setting and returned as
     ``{"ok": False, "error": ...}``. Only a missing Gmail configuration raises.
+
+    `today` is injectable for tests (defaults to the real current date).
     """
     address = get_setting(session, K_ADDRESS)
     password = get_setting(session, K_PASSWORD)
     if not address or not password:
         raise RuntimeError("Gmail not configured — add your address and app password in Settings.")
     try:
-        deals = fetch_promos(address, password, imap_class=imap_class)
+        deals = fetch_promos(address, password, imap_class=imap_class, today=today)
         added, new_restaurants = store_deals(session, deals)
     except Exception as exc:
         now = datetime.now().isoformat(timespec="minutes")

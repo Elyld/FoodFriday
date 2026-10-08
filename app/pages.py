@@ -42,6 +42,8 @@ def layout(title: str, body: str, active: str = "") -> str:
   <nav>
     {nav("/", "Pick", "home")}
     {nav("/restaurants", "Restaurants", "restaurants")}
+    {nav("/discover", "🧭 Discover", "discover")}
+    {nav("/spending", "💰 Spending", "spending")}
     {nav("/history", "History", "history")}
     {nav("/import", "Import", "import")}
     {nav("/settings", "Settings", "settings")}
@@ -59,6 +61,10 @@ def home_page() -> str:
 <div class="hero">
   <h1>What's for dinner Friday?</h1>
   <p>Three contenders, picked from your rotation. Tap the winner.</p>
+  <div class="mode-toggle">
+    <button class="btn-secondary btn-small mode-btn active" id="mode-friday" onclick="setPickMode('friday')">🍽️ Friday picks</button>
+    <button class="btn-secondary btn-small mode-btn" id="mode-new" onclick="setPickMode('new')">✨ Somewhere new</button>
+  </div>
   <button class="btn-primary" id="pick-btn" onclick="pickDinner()">🎲 Pick 3 for us</button>
 </div>
 <div id="pick-area"></div>
@@ -181,6 +187,90 @@ def history_page(visits: list[dict]) -> str:
     return layout("History", body, "history")
 
 
+def discover_page() -> str:
+    body = """
+<h2>🧭 Discover nearby</h2>
+<p style="color:#7a6552">New places around you, from Yelp — spots already in your list are hidden.
+Add one and it's in the rotation (and eligible for "✨ Somewhere new").</p>
+<div id="discover-setup"></div>
+<div class="card-form" id="discover-controls" style="display:none">
+  <div class="form-row">
+    <div class="field"><label>Radius</label>
+      <select id="disc-radius">
+        <option value="5">5 km</option>
+        <option value="10" selected>10 km</option>
+        <option value="25">25 km</option>
+      </select></div>
+    <div class="field"><label>&nbsp;</label>
+      <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+        <button class="btn-primary btn-small" onclick="searchDiscover(false)">🔍 Search nearby</button>
+        <button class="btn-secondary btn-small" onclick="searchDiscover(true)">↻ Refresh (live)</button>
+      </div></div>
+  </div>
+  <div id="discover-cache-note" style="color:#7a6552;font-size:.85rem"></div>
+</div>
+<div id="discover-results"></div>
+"""
+    return layout("Discover", body, "discover")
+
+
+def spending_page(a: dict) -> str:
+    def bar(label: str, value: float, pct: float) -> str:
+        return f"""<div class="bar-row">
+  <span class="bar-label">{esc(label)}</span>
+  <span class="bar-track"><span class="bar-fill" style="width:{pct:.1f}%"></span></span>
+  <span class="bar-val">${value:,.2f}</span>
+</div>"""
+
+    if a["monthly"]:
+        monthly = "".join(
+            bar(m["label"], m["total"], (m["total"] / a["max_month"] * 100) if a["max_month"] else 0)
+            for m in a["monthly"]
+        )
+    else:
+        monthly = '<div class="empty">No spending logged yet.</div>'
+
+    if a["top_restaurants"]:
+        top = "".join(
+            f"""<tr><td data-label="Restaurant"><strong>{esc(r["name"])}</strong></td>
+<td data-label="Visits">{r["visits"]}</td><td data-label="Total">${r["total"]:,.2f}</td></tr>"""
+            for r in a["top_restaurants"]
+        )
+        top_tbl = f"<table class='grid'><thead><tr><th>Restaurant</th><th>Visits</th><th>Total</th></tr></thead><tbody>{top}</tbody></table>"
+    else:
+        top_tbl = '<div class="empty">No spending logged yet.</div>'
+
+    if a["cuisines"]:
+        cuis = "".join(
+            bar(c["name"], c["total"], (c["total"] / a["max_cuisine"] * 100) if a["max_cuisine"] else 0)
+            for c in a["cuisines"]
+        )
+    else:
+        cuis = '<div class="empty">No spending logged yet.</div>'
+
+    note = (
+        f'<p style="color:#7a6552;font-size:.85rem">{a["without_totals"]} visit(s) without a total were excluded from these numbers.</p>'
+        if a["without_totals"] else ""
+    )
+
+    body = f"""
+<h2>💰 Spending</h2>
+<div class="stat-row">
+  <div class="stat"><div class="stat-num">${a["total"]:,.2f}</div><div class="stat-label">all-time</div></div>
+  <div class="stat"><div class="stat-num">${a["average"]:,.2f}</div><div class="stat-label">avg / visit</div></div>
+  <div class="stat"><div class="stat-num">{a["visit_count"]}</div><div class="stat-label">visits with totals</div></div>
+</div>
+{note}
+<h3>Last 6 months</h3>
+<div class="bars">{monthly}</div>
+<h3>Top restaurants</h3>
+{top_tbl}
+<h3>By cuisine</h3>
+<div class="bars">{cuis}</div>
+"""
+    return layout("Spending", body, "spending")
+
+
 def settings_page(s: dict) -> str:
     enabled = "checked" if s["deal_scan_enabled"] else ""
     last_run = fmt_date(s["deal_scan_last_run"][:10]) if s.get("deal_scan_last_run") else "never"
@@ -228,6 +318,50 @@ so the Friday boost works.</p>
 <code>myaccount.google.com/apppasswords</code> and paste it above. The password is stored only
 in this app's own database, never leaves your server except to log in to Gmail's IMAP,
 and is never shown back to you.</p>
+<h3>🧭 Discover (Yelp)</h3>
+<p style="color:#7a6552">Find new places around you on the <a href="/discover">Discover</a> tab.
+Needs a free Yelp API key: <code>developer.yelp.com</code> → Create App → Starter plan
+(free, no credit card). Results are cached for 24 hours so the free quota lasts.</p>
+<form class="card-form" id="discover-settings-form" onsubmit="return saveDiscoverSettings(event)">
+  <div class="field"><label>Yelp API key</label>
+    <input id="y-key" type="password" maxlength="255" placeholder="{'set — leave blank to keep' if s["yelp_api_key_set"] else 'paste your Yelp Fusion API key'}" autocomplete="new-password"></div>
+  <div class="form-row">
+    <div class="field"><label>Home latitude</label>
+      <input id="y-lat" maxlength="20" placeholder="39.048" value="{esc(s["home_lat"])}"></div>
+    <div class="field"><label>Home longitude</label>
+      <input id="y-lon" maxlength="20" placeholder="-95.678" value="{esc(s["home_lon"])}"></div>
+  </div>
+  <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+    <button class="btn-primary btn-small" type="submit">Save</button>
+    <button class="btn-secondary btn-small" type="button" onclick="useMyLocation()">📍 Use my location</button>
+  </div>
+</form>
+<h3>🔔 Friday nudge (Discord)</h3>
+<p style="color:#7a6552">Every Friday morning, FoodFriday posts the 3 picks to your Discord.
+Create a webhook in your server: channel settings → Integrations → Webhooks → New Webhook → Copy URL.</p>
+<form class="card-form" id="nudge-settings-form" onsubmit="return saveNudgeSettings(event)">
+  <div class="field"><label>Discord webhook URL</label>
+    <input id="n-webhook" type="password" maxlength="500" placeholder="{'set — leave blank to keep' if s["discord_webhook_set"] else 'https://discord.com/api/webhooks/…'}"></div>
+  <div class="form-row">
+    <div class="field"><label>Friday nudge time</label>
+      <input id="n-time" type="time" value="{esc(s["friday_nudge_time"])}"></div>
+    <div class="field"><label>&nbsp;</label>
+      <label class="check"><input id="n-enabled" type="checkbox" {'checked' if s["friday_nudge_enabled"] else ""}> nudge enabled</label></div>
+  </div>
+  <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+    <button class="btn-primary btn-small" type="submit">Save</button>
+    <button class="btn-secondary btn-small" type="button" onclick="sendTestNudge()">📣 Send test</button>
+    <button class="btn-danger btn-small" type="button" onclick="clearIntegrations()">Forget Yelp key &amp; webhook</button>
+  </div>
+  <p style="color:#7a6552;font-size:.85rem">Last nudge: {esc(s.get("friday_nudge_last_result") or "never")}</p>
+  <div id="nudge-result"></div>
+</form>
+<h3>🎲 Picker</h3>
+<form class="card-form" onsubmit="return savePickerSettings(event)">
+  <label class="check"><input id="p-avoid-cuisine" type="checkbox" {'checked' if s["avoid_repeat_cuisine"] else ""}>
+    Don't pick the same cuisine as the most recent visit</label>
+  <div style="margin-top:.6rem"><button class="btn-primary btn-small" type="submit">Save</button></div>
+</form>
 """
     return layout("Settings", body, "settings")
 

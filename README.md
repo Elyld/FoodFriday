@@ -14,16 +14,20 @@ Hit **Pick 3 for us** and it deals three restaurants from your rotation — weig
 - **Deals boost**: an *active* deal on a restaurant multiplies its weight by **×1.5**, and if the deal's item keywords match something you've actually ordered there (from receipt items), an extra **×1.25** on top. Pick cards show a 🏷️ badge with the deal title.
 - Weighted random draw, no repeats within the three cards.
 - Each card carries a one-line reason: *"New — never logged"*, *"Haven't been since Jun 2026"*, *"A favorite"*, …
+- **✨ Somewhere new mode**: flip the toggle on the home page and the picker draws only from restaurants with zero logged visits — same 3-card UI, tap-to-log, reroll, veto. A stored Yelp rating gives a gentle tiebreak boost. Empty state points you at Discover.
+- **Cuisine rotation**: by default the picker skips the cuisine of your most recent visit (*"skipping Mexican — last week's pick"*), with an "include it anyway" override. Toggle it in Settings → Picker.
 
 ## Pages
 
 | Page | What it does |
 |---|---|
-| `/` | The picker: 3 cards, tap-to-log, veto, reroll |
+| `/` | The picker: 3 cards, tap-to-log, veto, reroll, Friday / Somewhere-new modes |
 | `/restaurants` | Your restaurant list — cuisine, price ($–$$$), notes, ★ favorites, visit counts, one-tap "We ate here tonight" |
+| `/discover` | 🧭 Nearby restaurants from Yelp (ratings, distance, price) — one-tap add to your list |
+| `/spending` | 💰 Spending dashboard: all-time + average, last 6 months, top restaurants, by cuisine |
 | `/history` | Every logged visit (date, total, source), with delete |
 | `/import` | Upload a seed JSON → preview → confirm. Re-imports are safe no-ops. |
-| `/settings` | Gmail deal-scanner setup: address + app password, daily scan time, 🔍 Scan now, last-scan status |
+| `/settings` | Gmail deal-scanner, Yelp/Discover, Discord Friday nudge, picker options |
 
 ## Import format
 
@@ -86,6 +90,30 @@ Known-good formats: Chipotle, Sonic, Spangles, Casey's. After updating the seed,
 
 **Privacy note:** your real history (email-receipt backfills and the like) should live in a local file like `seed/*.seed.json` — that directory is gitignored and never committed, and the Docker image ships with an empty database. Upload your real data through the Import page after deploying.
 
+## 🧭 Discover (nearby restaurants via Yelp)
+
+The Discover tab finds restaurants around you that aren't in your list yet — with Yelp ratings, price, distance, and cuisine. Spots already in your database are hidden automatically. **➕ Add to my restaurants** drops one into the rotation (its Yelp rating is saved and gives it a slight edge in ✨ Somewhere new mode).
+
+**Setup** (Settings → Discover):
+1. Get a free Yelp Fusion API key: `developer.yelp.com` → Create App → **Starter** plan (free, no credit card — ~150 calls/day).
+2. Paste the key, set your home location (type it or hit **📍 Use my location**), Save.
+
+Results are **cached for 24 hours** per location + radius so the free quota isn't burned by repeat views — the page shows "cached Xh ago" with a Refresh link for a live search. The key is stored only in this app's own database and never shown back to you (same masking as the Gmail app password); there's a **Forget Yelp key & webhook** button to wipe it.
+
+## 🔔 Friday nudge (Discord)
+
+Every Friday morning FoodFriday can post the 3 picks to your Discord — names, cuisine, the reason line, and any 🏷️ deal. Setup:
+
+1. In your Discord server: channel settings → Integrations → Webhooks → New Webhook → Copy URL.
+2. Settings → paste the webhook URL, set the Friday time (default 10:00 AM), enable, Save.
+3. Hit **📣 Send test** to verify it lands.
+
+Failures are recorded on the Settings page (last-nudge line) and never break anything else. Scheduler times are container-local — keep `TZ: America/Chicago` in your Dockge stack or the nudge fires at the wrong hour (same UTC trap as the deal scanner).
+
+## 💰 Spending
+
+The Spending tab totals your logged visits: all-time spend, average per visit, a 6-month bar chart, top-10 restaurants, and spend by cuisine. Visits without a total are excluded from the math and counted separately (*"N visit(s) without a total were excluded"*).
+
 ## Run it (Docker / Dockge)
 
 ```yaml
@@ -110,16 +138,17 @@ Or paste-ready: the repo's `docker-compose.yml` is a drop-in Dockge stack. Then 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 PYTHONPATH=. .venv/bin/python -m uvicorn app.main:app --port 4002
-PYTHONPATH=. .venv/bin/python -m pytest -q   # 70 tests
+PYTHONPATH=. .venv/bin/python -m pytest -q   # 105 tests
 ```
 
 ## Screenshots
 
 | | |
 |---|---|
-| ![Pick 3](docs/screenshots/home-picks.png) | ![Restaurants](docs/screenshots/restaurants.png) |
-| ![Mobile](docs/screenshots/mobile-home.png) | ![Deals](docs/screenshots/restaurants-deals.png) |
-| ![Settings](docs/screenshots/settings.png) | |
+| ![Pick 3](docs/screenshots/home-picks.png) | ![Somewhere new](docs/screenshots/home-new-mode.png) |
+| ![Restaurants](docs/screenshots/restaurants.png) | ![Deals](docs/screenshots/restaurants-deals.png) |
+| ![Discover](docs/screenshots/discover.png) | ![Spending](docs/screenshots/spending.png) |
+| ![Settings](docs/screenshots/settings.png) | ![Mobile](docs/screenshots/mobile-home.png) |
 
 ## Stack
 

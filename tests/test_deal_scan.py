@@ -233,7 +233,10 @@ def _patch_run_scan(monkeypatch):
     import app.deal_scan as ds
 
     real = ds.run_scan
-    monkeypatch.setattr(ds, "run_scan", lambda session, imap_class=None: real(session, imap_class=_mailbox()))
+    monkeypatch.setattr(
+        ds, "run_scan",
+        lambda session, imap_class=None: real(session, imap_class=_mailbox(), today=TODAY),
+    )
 
 
 def _wait_status(want=("done", "error"), timeout=20):

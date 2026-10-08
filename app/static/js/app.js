@@ -24,6 +24,19 @@ async function api(method, path, body) {
 // ---- Pick flow ----
 let currentPicks = [];   // restaurant ids currently shown
 let vetoed = [];         // ids ruled out this round
+let pickMode = 'friday'; // 'friday' | 'new'
+let includeCuisine = false;
+
+function setPickMode(mode) {
+  pickMode = mode;
+  includeCuisine = false;
+  vetoed = [];
+  document.getElementById('mode-friday').classList.toggle('active', mode === 'friday');
+  document.getElementById('mode-new').classList.toggle('active', mode === 'new');
+  document.getElementById('pick-btn').textContent = mode === 'new' ? '✨ Pick 3 new spots' : '🎲 Pick 3 for us';
+  document.getElementById('pick-area').innerHTML = '';
+  document.getElementById('pick-actions').style.display = 'none';
+}
 
 function priceStr(tier) { return '$'.repeat(tier || 1); }
 
@@ -33,11 +46,8 @@ function fmtDate(iso) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function renderPicks(picks) {
-  currentPicks = picks.map(p => p.id);
-  const area = document.getElementById('pick-area');
-  document.getElementById('pick-actions').style.display = 'flex';
-  area.innerHTML = '<div class="cards">' + picks.map(p => `
+function pickCardsHtml(picks) {
+  return '<div class="cards">' + picks.map(p => `
     <div class="pick-card">
       <button class="veto" title="Not this one — replace it" onclick="vetoCard(${p.id})">✕</button>
       <div class="price">${priceStr(p.price_tier)}</div>
@@ -50,6 +60,12 @@ function renderPicks(picks) {
     </div>`).join('') + '</div>';
 }
 
+function renderPicks(picks) {
+  currentPicks = picks.map(p => p.id);
+  document.getElementById('pick-actions').style.display = 'flex';
+  document.getElementById('pick-area').innerHTML = pickCardsHtml(picks);
+}
+
 function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
@@ -58,15 +74,32 @@ async function fetchPicks(keep, veto) {
   const area = document.getElementById('pick-area');
   area.innerHTML = '<div class="spinner">🎲 Picking…</div>';
   try {
-    const data = await api('POST', '/api/pick', { keep_ids: keep, veto_ids: veto });
+    const data = await api('POST', '/api/pick', { keep_ids: keep, veto_ids: veto, mode: pickMode, include_cuisine: includeCuisine });
     if (!data.picks.length) {
-      area.innerHTML = '<div class="empty">No restaurants yet. <a href="/restaurants">Add some</a> and spin again.</div>';
+      if (pickMode === 'new') {
+        area.innerHTML = '<div class="empty">No untried places — <a href="/discover">hit Discover</a> to add some.</div>';
+      } else {
+        area.innerHTML = '<div class="empty">No restaurants yet. <a href="/restaurants">Add some</a> and spin again.</div>';
+      }
       return;
     }
-    renderPicks(data.picks);
+    let banner = '';
+    if (data.skipped_cuisine) {
+      banner = `<div class="preview-box">Skipping <strong>${escapeHtml(data.skipped_cuisine)}</strong> — that's what you had last time.
+        <a href="#" onclick="includeCuisineAnyway();return false;">Include it anyway</a></div>`;
+    }
+    currentPicks = data.picks.map(p => p.id);
+    document.getElementById('pick-actions').style.display = 'flex';
+    area.innerHTML = banner + pickCardsHtml(data.picks);
   } catch (e) {
     area.innerHTML = '<div class="empty">Couldn\'t pick: ' + escapeHtml(e.message) + '</div>';
   }
+}
+
+function includeCuisineAnyway() {
+  includeCuisine = true;
+  vetoed = [];
+  fetchPicks([], []);
 }
 
 function pickDinner() { vetoed = []; fetchPicks([], []); }
@@ -247,4 +280,151 @@ async function confirmImport() {
       `<div class="preview-box"><strong>Done:</strong> ${data.restaurants_added} restaurants, ${data.visits_added} visits, ${data.deals_added || 0} deals added${data.items_backfilled ? `, ${data.items_backfilled} visits got item details` : ''}.</div>`;
     toast('Import complete 🎉');
   } catch (e) { toast('Import failed: ' + e.message); }
+}
+
+// ---- Discover (Yelp nearby) ----
+let discoverBusinesses = [];
+
+async function discoverInit() {
+  try {
+    const s = await api('GET', '/api/settings');
+    if (!s.yelp_api_key_set || !s.home_lat || !s.home_lon) {
+      document.getElementById('discover-setup').innerHTML =
+        '<div class="empty">Add your <strong>Yelp API key</strong> and <strong>home location</strong> in ' +
+        '<a href="/settings">Settings</a> to search for new places nearby.</div>';
+      return;
+    }
+    document.getElementById('discover-controls').style.display = 'block';
+  } catch (e) {
+    document.getElementById('discover-setup').innerHTML =
+      '<div class="empty">Couldn\'t load settings: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+async function searchDiscover(refresh) {
+  const box = document.getElementById('discover-results');
+  const note = document.getElementById('discover-cache-note');
+  const radius = parseFloat(document.getElementById('disc-radius').value);
+  box.innerHTML = '<div class="spinner">🔍 Searching nearby…</div>';
+  note.textContent = '';
+  try {
+    const data = await api('GET', `/api/discover?radius_km=${radius}&refresh=${refresh ? 1 : 0}`);
+    discoverBusinesses = data.businesses;
+    if (data.cached && data.cached_at) {
+      const d = new Date(data.cached_at);
+      note.textContent = `Cached ${d.toLocaleString()} — hit Refresh for a live search.`;
+    } else if (!data.cached) {
+      note.textContent = 'Live results, cached for 24h.';
+    }
+    if (!discoverBusinesses.length) {
+      box.innerHTML = '<div class="empty">Nothing new nearby — everything found is already in your list. 🎉</div>';
+      return;
+    }
+    box.innerHTML = '<div class="cards">' + discoverBusinesses.map((b, i) => `
+      <div class="pick-card">
+        <div class="price">${escapeHtml(b.price_label || '')}</div>
+        <h3>${escapeHtml(b.name)}</h3>
+        <div class="cuisine">${escapeHtml(b.cuisine || '')}</div>
+        <div>${b.rating != null ? '⭐ ' + b.rating : 'no rating'}${b.distance_mi != null ? ' · ' + b.distance_mi + ' mi' : ''}</div>
+        <div class="last">${escapeHtml(b.address || '')}</div>
+        <button class="eat" id="disc-add-${i}" onclick="addDiscovered(${i})">➕ Add to my restaurants</button>
+      </div>`).join('') + '</div>';
+  } catch (e) {
+    box.innerHTML = '<div class="empty">Search failed: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+async function addDiscovered(i) {
+  const b = discoverBusinesses[i];
+  const btn = document.getElementById('disc-add-' + i);
+  btn.disabled = true;
+  try {
+    const r = await api('POST', '/api/discover/add', {
+      yelp_id: b.yelp_id, name: b.name, cuisine: b.cuisine || null,
+      price_tier: b.price_tier, address: b.address || null, rating: b.rating,
+    });
+    btn.textContent = r.already ? 'Already in your list ✓' : 'Added ✓';
+    toast(r.already ? 'Already in your list' : 'Added to your restaurants 🎉');
+  } catch (e) {
+    btn.disabled = false;
+    toast('Couldn\'t add: ' + e.message);
+  }
+}
+
+// ---- Settings: discover / nudge / picker ----
+async function saveDiscoverSettings(e) {
+  e.preventDefault();
+  try {
+    await api('PUT', '/api/settings', {
+      yelp_api_key: document.getElementById('y-key').value || null,
+      home_lat: document.getElementById('y-lat').value.trim() || null,
+      home_lon: document.getElementById('y-lon').value.trim() || null,
+    });
+    toast('Discover settings saved ✓');
+    location.reload();
+  } catch (err) { toast('Couldn\'t save: ' + err.message); }
+  return false;
+}
+
+function useMyLocation() {
+  if (!navigator.geolocation) { toast('Geolocation not available in this browser'); return; }
+  toast('Locating…');
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      document.getElementById('y-lat').value = pos.coords.latitude.toFixed(4);
+      document.getElementById('y-lon').value = pos.coords.longitude.toFixed(4);
+      toast('Location filled in — hit Save ✓');
+    },
+    () => toast('Couldn\'t get your location'),
+    { timeout: 10000 }
+  );
+}
+
+async function saveNudgeSettings(e) {
+  e.preventDefault();
+  try {
+    await api('PUT', '/api/settings', {
+      discord_webhook_url: document.getElementById('n-webhook').value || null,
+      friday_nudge_enabled: document.getElementById('n-enabled').checked,
+      friday_nudge_time: document.getElementById('n-time').value || null,
+    });
+    toast('Nudge settings saved ✓');
+    location.reload();
+  } catch (err) { toast('Couldn\'t save: ' + err.message); }
+  return false;
+}
+
+async function sendTestNudge() {
+  const box = document.getElementById('nudge-result');
+  box.innerHTML = '<div class="spinner">Sending test…</div>';
+  try {
+    await api('POST', '/api/settings/test-nudge');
+    box.innerHTML = '<div class="preview-box"><strong>Test sent ✓</strong> — check your Discord channel.</div>';
+  } catch (e) {
+    box.innerHTML = '<div class="empty">Test failed: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+async function clearIntegrations() {
+  if (!confirm('Forget the stored Yelp API key and Discord webhook? Discover and the Friday nudge will stop.')) return;
+  try {
+    await api('POST', '/api/settings/clear-integrations');
+    location.reload();
+  } catch (err) { toast('Couldn\'t clear: ' + err.message); }
+}
+
+async function savePickerSettings(e) {
+  e.preventDefault();
+  try {
+    await api('PUT', '/api/settings', {
+      avoid_repeat_cuisine: document.getElementById('p-avoid-cuisine').checked,
+    });
+    toast('Picker settings saved ✓');
+  } catch (err) { toast('Couldn\'t save: ' + err.message); }
+  return false;
+}
+
+// page init: run discover setup when on the discover page
+if (document.getElementById('discover-results') && typeof discoverInit === 'function') {
+  discoverInit();
 }

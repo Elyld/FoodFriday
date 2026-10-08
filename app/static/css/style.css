@@ -182,3 +182,22 @@ form.card-form h3 { margin-top: 0; }
 .deal-when, .deal-kw { font-size: 0.82rem; color: var(--brown-soft); margin-top: 0.15rem; }
 .check { display: flex; gap: 0.5rem; align-items: center; margin-top: 1.9rem; font-weight: 600; }
 .check input { width: 1.1rem; height: 1.1rem; accent-color: var(--paprika); }
+
+/* Mode toggle (home page) */
+.mode-toggle { display: flex; gap: 0.5rem; justify-content: center; margin: 0.6rem 0 1rem; }
+.mode-btn.active { border-color: var(--paprika); color: var(--paprika); font-weight: 700; }
+
+/* Spending dashboard */
+.stat-row { display: flex; gap: 0.8rem; flex-wrap: wrap; margin: 1rem 0 1.5rem; }
+.stat {
+  background: var(--card); border: 2px solid var(--cream-dark); border-radius: 12px;
+  padding: 0.8rem 1.2rem; min-width: 9rem; text-align: center;
+}
+.stat-num { font-size: 1.6rem; font-weight: 800; color: var(--paprika); }
+.stat-label { font-size: 0.8rem; color: var(--brown-soft); }
+.bars { display: grid; gap: 0.4rem; margin: 0.6rem 0 1.5rem; }
+.bar-row { display: flex; align-items: center; gap: 0.7rem; }
+.bar-label { width: 7.5rem; flex-shrink: 0; font-size: 0.9rem; }
+.bar-track { flex: 1; background: var(--cream-dark); border-radius: 999px; height: 1.1rem; overflow: hidden; }
+.bar-fill { display: block; height: 100%; background: linear-gradient(90deg, var(--paprika), #d98a4b); border-radius: 999px; }
+.bar-val { width: 5.5rem; text-align: right; font-weight: 700; font-size: 0.9rem; flex-shrink: 0; }
