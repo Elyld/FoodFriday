@@ -162,6 +162,44 @@ def _last_amount(text: str) -> float | None:
     return None
 
 
+def parse_mcdonalds_total(body: str) -> float | None:
+    """McDonald's 'Mobile Order Receipt' layout (verified 2026-10-08):
+
+        Discount  $4.23
+        Subtotal  $29.00
+        ...
+        Total $31.71
+        Total Savings  $4.23
+
+    The HTML-to-text conversion mangles table layouts unpredictably, so:
+    prefer a bare "Total $X" line; otherwise accept when every total-ish
+    line agrees on one amount. "Subtotal" and "Total Savings" lines are
+    excluded. Never guesses between differing amounts.
+    """
+    bare: float | None = None
+    cands: set[float] = set()
+    for line in body.splitlines():
+        if not re.search(r"(?i)(?<!sub)total", line):
+            continue
+        if re.search(r"(?i)savings", line):
+            continue
+        m = re.search(r"\$" + _AMT, line)
+        if not m:
+            continue
+        try:
+            amt = float(m.group(1).replace(",", ""))
+        except ValueError:
+            continue
+        cands.add(amt)
+        if bare is None and re.match(r"\s*total\s*:?\s*\$", line, re.IGNORECASE):
+            bare = amt
+    if bare is not None:
+        return bare
+    if len(cands) == 1:
+        return next(iter(cands))
+    return None
+
+
 # sender fragments, subject fragments (any-of), total regexes (in order)
 RECEIPT_CHAINS: list[dict] = [
     {
@@ -291,7 +329,7 @@ RECEIPT_CHAINS: list[dict] = [
         "sender": ("mcdonalds",),
         "subject": ("receipt", "thanks for your order", "thanks for placing",
                     "order confirmation", "your mcdonald", "mobile order"),
-        "total": [r"(?<!sub)total\s*:?\s*\$" + _AMT],
+        "total": parse_mcdonalds_total,
         "items": None,
     },
     {
@@ -369,6 +407,8 @@ def parse_receipt(chain: dict, body: str) -> dict:
         spec = chain["total"]
         if spec == "last_amount":
             total = _last_amount(body)
+        elif callable(spec):
+            total = spec(body)
         elif spec:
             total = _try_patterns(body, spec)
         if total is None:

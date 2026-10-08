@@ -420,7 +420,7 @@ def test_store_receipts_skips_seed_imported_pair():
             "total": 13.12,
             "items": [],
         }]
-        added, _ = store_receipts(s, receipts)
+        added, _, _ = store_receipts(s, receipts)
         s.commit()
         assert added == 0
         assert s.query(Visit).filter(Visit.restaurant_id == r.id).count() == 1
@@ -441,3 +441,67 @@ def test_receipt_sender_domains_are_imap_safe():
     assert "mcdonalds" in domains
     assert "schlotzsky" in domains
     assert "churchschicken" in domains
+
+
+def test_parse_mcdonalds_total_real_layout():
+    """The 'Mobile Order Receipt' layout from a real email (2026-10-08)."""
+    from app.receipt_parse import parse_mcdonalds_total
+    body = (
+        "Discount  $4.23 \n"
+        "Subtotal  $29.00 \n"
+        "Tax Rate  Base for Tax  Tax Amount \n"
+        "9.35  29.00  $2.71 \n"
+        "Total  $31.71 \n"
+        "Total Savings  $4.23 \n"
+    )
+    assert parse_mcdonalds_total(body) == 31.71
+
+
+def test_parse_mcdonalds_total_via_chain():
+    chain = detect_receipt("McDonald's <DoNotReply_US@us.mcdonalds.com>",
+                           "Thanks for placing a mobile order!")
+    assert chain["name"] == "McDonald's"
+    assert parse_receipt(chain, "Total $8.49\nTotal Savings $1.00")["total"] == 8.49
+
+
+def test_parse_mcdonalds_total_wont_guess():
+    from app.receipt_parse import parse_mcdonalds_total
+    # two differing amounts on total-lines, no bare "Total $X" -> None
+    assert parse_mcdonalds_total("Order Total $10.00\nGrand Total $12.00") is None
+    assert parse_mcdonalds_total("no money here") is None
+    # but a single agreed amount is fine
+    assert parse_mcdonalds_total("Order Total $10.00") == 10.00
+
+
+def test_store_receipts_backfills_missing_totals():
+    """A rescan fills in totals for visits logged before the parser existed."""
+    from datetime import date as _date
+
+    s = _session_with_creds()
+    try:
+        r = Restaurant(name="Backfill Test", cuisine="Burgers", price_tier=1,
+                       favorite=False, include_in_picks=True, track_visits=True)
+        s.add(r)
+        s.flush()
+        s.add(Visit(restaurant_id=r.id, visited_at=_date(2026, 9, 20), total=None,
+                    source="email", external_id="gmail:backfill1"))
+        s.commit()
+        receipts = [{
+            "chain": "Backfill Test",
+            "msgid": "backfill1",
+            "sent": _date(2026, 9, 20),
+            "total": 31.71,
+            "items": [],
+        }]
+        added, _, backfilled = store_receipts(s, receipts)
+        s.commit()
+        assert added == 0
+        assert backfilled == 1
+        v = s.query(Visit).filter(Visit.external_id == "gmail:backfill1").one()
+        assert v.total == 31.71
+
+        # second run: nothing left to backfill
+        added2, _, backfilled2 = store_receipts(s, receipts)
+        assert (added2, backfilled2) == (0, 0)
+    finally:
+        s.close()

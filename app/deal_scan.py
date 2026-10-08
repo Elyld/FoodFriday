@@ -426,7 +426,7 @@ def fetch_receipts(
                 pass
 
 
-def store_receipts(session: Session, receipts: list[dict]) -> tuple[int, int]:
+def store_receipts(session: Session, receipts: list[dict]) -> tuple[int, int, int]:
     """Insert parsed receipts as visits with dedupe + auto-create restaurants.
 
     Restaurants with track_visits=False are skipped entirely (the McDonald's /
@@ -435,10 +435,15 @@ def store_receipts(session: Session, receipts: list[dict]) -> tuple[int, int]:
     the pair guard recent seed visits would be duplicated by the first scan.
     Confirmation-only emails (no parseable total) are logged with total=None.
 
-    Returns (visits_added, restaurants_added).
+    Backfill: when a receipt's external_id is already logged but that visit
+    has total=None (its chain's parser couldn't read the total at the time)
+    and the receipt now parses a total, the visit is updated in place.
+
+    Returns (visits_added, restaurants_added, totals_backfilled).
     """
     restaurants_added = 0
     visits_added = 0
+    totals_backfilled = 0
     name_to_r: dict[str, Restaurant] = {_norm(r.name): r for r in session.query(Restaurant).all()}
     existing_ext = {
         v.external_id
@@ -456,6 +461,11 @@ def store_receipts(session: Session, receipts: list[dict]) -> tuple[int, int]:
             continue  # can't dedupe without a message id — skip rather than risk dupes
         ext_id = f"gmail:{rc['msgid']}"
         if ext_id in existing_ext:
+            if rc.get("total") is not None:
+                v = session.query(Visit).filter(Visit.external_id == ext_id).first()
+                if v is not None and v.total is None:
+                    v.total = rc["total"]
+                    totals_backfilled += 1
             continue
         rname = _norm(rc["chain"])
         r = name_to_r.get(rname)
@@ -491,7 +501,7 @@ def store_receipts(session: Session, receipts: list[dict]) -> tuple[int, int]:
         existing_ext.add(ext_id)
         existing_pairs.add((r.id, rc["sent"].isoformat()))
         visits_added += 1
-    return visits_added, restaurants_added
+    return visits_added, restaurants_added, totals_backfilled
 
 
 def _scan_one_account(session: Session, address: str, password: str,
@@ -523,21 +533,23 @@ def _scan_one_account(session: Session, address: str, password: str,
             since = (today or date.today()) - timedelta(days=receipt_scan_days(session))
             receipts = fetch_receipts(address, password, imap_class=imap_class,
                                       since=since, today=today)
-            v_added, r_added = store_receipts(session, receipts)
+            v_added, r_added, t_backfilled = store_receipts(session, receipts)
             if v_added:
                 receipt_summary = f"{v_added} new visit{'s' if v_added != 1 else ''}"
                 if r_added:
                     receipt_summary += f" ({r_added} new restaurant{'s' if r_added != 1 else ''} added)"
             else:
                 receipt_summary = "no new receipts"
+            if t_backfilled:
+                receipt_summary += f" ({t_backfilled} total{'s' if t_backfilled != 1 else ''} filled in)"
         except Exception as exc:
             logger.warning("receipt scan failed for %s: %s", address, exc)
             receipt_summary = f"error: {exc}"
             errors.append(f"receipts: {exc}")
-            v_added, r_added = 0, 0
+            v_added, r_added, t_backfilled = 0, 0, 0
     else:
         receipt_summary = "receipt scanning disabled"
-        v_added, r_added = 0, 0
+        v_added, r_added, t_backfilled = 0, 0, 0
 
     return {
         "ok": not errors,
