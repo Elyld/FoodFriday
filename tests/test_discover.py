@@ -399,3 +399,12 @@ def test_search_overpass_all_mirrors_down_raises():
     import pytest
     with pytest.raises(RuntimeError, match="timed out"):
         search_overpass(39.05, -95.68, 5, http_post=_down)
+
+
+def test_search_overpass_dns_error_message_is_human_readable():
+    def _dns_fail(url, data):
+        raise OSError("[Errno -2] Name or service not known")
+
+    import pytest
+    with pytest.raises(RuntimeError, match="DNS lookup failed"):
+        search_overpass(39.05, -95.68, 5, http_post=_dns_fail)

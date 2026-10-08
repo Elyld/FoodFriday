@@ -209,9 +209,15 @@ def search_overpass(lat: float, lon: float, radius_km: float,
             continue
     else:
         exc = last_exc
-        # urllib raises URLError (a OSError) on timeouts; normalize the message
-        if exc is not None and "timed out" in str(exc).lower():
+        # Normalize cryptic urllib errors into something a human can act on.
+        msg = str(exc).lower() if exc is not None else ""
+        if "timed out" in msg:
             raise RuntimeError("OpenStreetMap search timed out — try again.") from exc
+        if "name or service not known" in msg or "nodename nor servname" in msg:
+            raise RuntimeError(
+                "Couldn't reach OpenStreetMap (DNS lookup failed) — "
+                "check the server's internet connection and try again."
+            ) from exc
         raise RuntimeError(f"OpenStreetMap search failed: {exc}") from exc
     elements = data.get("elements")
     if not isinstance(elements, list):
