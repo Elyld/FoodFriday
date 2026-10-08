@@ -288,7 +288,7 @@ RECEIPT_CHAINS: list[dict] = [
     },
     {
         "name": "McDonald's",
-        "sender": ("mcdonalds", "mcdonald's"),
+        "sender": ("mcdonalds",),
         "subject": ("receipt", "thanks for your order", "order confirmation",
                     "your mcdonald"),
         "total": [r"(?<!sub)total\s*:?\s*\$" + _AMT],
@@ -296,7 +296,7 @@ RECEIPT_CHAINS: list[dict] = [
     },
     {
         "name": "Schlotzsky's",
-        "sender": ("schlotzsky", "schlotzsky's"),
+        "sender": ("schlotzsky",),
         "subject": ("receipt", "thanks for your order", "order confirmation",
                     "your schlotzsky"),
         "total": [r"(?<!sub)total\s*:?\s*\$" + _AMT],
@@ -304,7 +304,7 @@ RECEIPT_CHAINS: list[dict] = [
     },
     {
         "name": "Church's Chicken",
-        "sender": ("churchschicken", "church's chicken"),
+        "sender": ("churchschicken",),
         "subject": ("receipt", "thanks for your order", "order confirmation",
                     "your church's"),
         "total": [r"(?<!sub)total\s*:?\s*\$" + _AMT],
@@ -349,11 +349,17 @@ def detect_receipt(sender: str, subject: str) -> dict | None:
 
 
 def receipt_sender_domains() -> list[str]:
-    """Unique sender fragments for IMAP FROM searches (longest first)."""
+    """Unique sender fragments for IMAP FROM searches (longest first).
+
+    Only IMAP-safe atoms are returned — a fragment with a space, quote, or
+    other special character would make the SEARCH command unparseable
+    (server responds BAD) and fail the whole receipt phase.
+    """
     frags: set[str] = set()
     for chain in RECEIPT_CHAINS:
         frags.update(chain["sender"])
-    return sorted(frags, key=len, reverse=True)
+    safe = [f for f in frags if re.fullmatch(r"[A-Za-z0-9._-]+", f)]
+    return sorted(safe, key=len, reverse=True)
 
 
 def parse_receipt(chain: dict, body: str) -> dict:

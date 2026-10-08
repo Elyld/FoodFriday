@@ -425,3 +425,18 @@ def test_store_receipts_skips_seed_imported_pair():
         assert s.query(Visit).filter(Visit.restaurant_id == r.id).count() == 1
     finally:
         s.close()
+
+
+def test_receipt_sender_domains_are_imap_safe():
+    """Every fragment fed to IMAP SEARCH must be a bare atom — a space or
+    quote makes the server reject the whole command (BAD)."""
+    import re
+    from app.receipt_parse import receipt_sender_domains
+    domains = receipt_sender_domains()
+    assert domains, "expected at least one sender domain"
+    for d in domains:
+        assert re.fullmatch(r"[A-Za-z0-9._-]+", d), f"IMAP-unsafe fragment: {d!r}"
+    # the apostrophe-name chains must still be searchable via their domains
+    assert "mcdonalds" in domains
+    assert "schlotzsky" in domains
+    assert "churchschicken" in domains
