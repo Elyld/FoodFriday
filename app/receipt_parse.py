@@ -294,6 +294,22 @@ RECEIPT_CHAINS: list[dict] = [
         "total": [r"(?<!sub)total\s*:?\s*\$" + _AMT],
         "items": None,
     },
+    {
+        "name": "Schlotzsky's",
+        "sender": ("schlotzsky", "schlotzsky's"),
+        "subject": ("receipt", "thanks for your order", "order confirmation",
+                    "your schlotzsky"),
+        "total": [r"(?<!sub)total\s*:?\s*\$" + _AMT],
+        "items": None,
+    },
+    {
+        "name": "Church's Chicken",
+        "sender": ("churchschicken", "church's chicken"),
+        "subject": ("receipt", "thanks for your order", "order confirmation",
+                    "your church's"),
+        "total": [r"(?<!sub)total\s*:?\s*\$" + _AMT],
+        "items": None,
+    },
     # delivery aggregators — generic total fallback only
     {
         "name": "DoorDash",
