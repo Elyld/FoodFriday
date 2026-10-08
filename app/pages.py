@@ -358,6 +358,9 @@ so the Friday boost works.</p>
   <div class="form-row">
     <div class="field"><label>Daily scan time</label>
       <input id="s-time" type="time" value="{esc(s["deal_scan_time"])}"></div>
+    <div class="field"><label>Receipt history (days)</label>
+      <input id="s-receipt-days" type="number" min="1" max="3650" step="1" value="{s.get("receipt_scan_days", 365)}"
+        title="How far back the receipt scan looks for orders"></div>
     <div class="field"><label>&nbsp;</label>
       <label class="check"><input id="s-enabled" type="checkbox" {enabled}> deal scanning enabled</label>
       <label class="check"><input id="s-receipt-enabled" type="checkbox" {r_enabled}> receipt scanning enabled</label></div>

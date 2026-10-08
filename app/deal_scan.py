@@ -51,8 +51,12 @@ K_STATUS = "deal_scan_status"            # idle | running | done | error
 
 # receipt phase (same scan, same Gmail creds)
 K_R_ENABLED = "receipt_scan_enabled"         # "1"/"0", default on
+K_R_DAYS = "receipt_scan_days"              # how far back to look, default 365
 K_R_LAST_RUN = "receipt_scan_last_run"      # ISO datetime
 K_R_LAST_RESULT = "receipt_scan_last_result"  # human-readable summary (receipts)
+
+DEFAULT_RECEIPT_SCAN_DAYS = 365
+MAX_RECEIPT_SCAN_DAYS = 3650  # 10 years — sanity cap for the number field
 
 # A stalled Gmail connection must never hang a request/scan forever.
 IMAP_TIMEOUT = 30  # seconds
@@ -130,6 +134,16 @@ def receipt_scan_enabled(session: Session) -> bool:
     if get_setting(session, K_R_ENABLED, "1") != "1":
         return False
     return scan_configured(session)
+
+
+def receipt_scan_days(session: Session) -> int:
+    """How far back the receipt phase looks. Defaults to a year; the user
+    can raise it in Settings for a deeper backfill."""
+    try:
+        days = int(get_setting(session, K_R_DAYS, "") or DEFAULT_RECEIPT_SCAN_DAYS)
+    except (TypeError, ValueError):
+        days = DEFAULT_RECEIPT_SCAN_DAYS
+    return min(max(days, 1), MAX_RECEIPT_SCAN_DAYS)
 
 
 # ---------- IMAP ----------
@@ -506,7 +520,9 @@ def _scan_one_account(session: Session, address: str, password: str,
     # --- receipt phase ---
     if receipt_scan_enabled(session):
         try:
-            receipts = fetch_receipts(address, password, imap_class=imap_class, today=today)
+            since = (today or date.today()) - timedelta(days=receipt_scan_days(session))
+            receipts = fetch_receipts(address, password, imap_class=imap_class,
+                                      since=since, today=today)
             v_added, r_added = store_receipts(session, receipts)
             if v_added:
                 receipt_summary = f"{v_added} new visit{'s' if v_added != 1 else ''}"

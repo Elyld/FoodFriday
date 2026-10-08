@@ -678,3 +678,58 @@ def test_scan_no_accounts_clean_state():
         assert list_accounts(s) == []
     finally:
         s.close()
+
+
+def test_receipt_scan_days_setting_round_trip():
+    _enable()
+    # default is a year
+    assert client.get("/api/settings").json()["receipt_scan_days"] == 365
+    # set a custom value
+    r = client.put("/api/settings", json={"receipt_scan_days": 730})
+    assert r.status_code == 200, r.text
+    assert client.get("/api/settings").json()["receipt_scan_days"] == 730
+    # validation
+    assert client.put("/api/settings", json={"receipt_scan_days": 0}).status_code == 400
+    assert client.put("/api/settings", json={"receipt_scan_days": 99999}).status_code == 400
+
+
+def test_receipt_scan_days_clamps_garbage():
+    from app.deal_scan import K_R_DAYS, receipt_scan_days, set_setting
+    s = SessionLocal()
+    try:
+        set_setting(s, K_R_DAYS, "not-a-number")
+        s.commit()
+        assert receipt_scan_days(s) == 365
+        set_setting(s, K_R_DAYS, "5")
+        s.commit()
+        assert receipt_scan_days(s) == 5
+    finally:
+        s.close()
+
+
+def test_scan_one_account_uses_configured_lookback():
+    """The receipt phase must search back receipt_scan_days, not 14."""
+    from datetime import date
+    from app import deal_scan as ds
+    from app.deal_scan import K_R_DAYS, set_setting
+
+    captured = {}
+
+    def fake_fetch(address, password, imap_class=None, since=None, today=None):
+        captured["since"] = since
+        return []
+
+    s = SessionLocal()
+    try:
+        set_setting(s, K_R_DAYS, "100")
+        s.commit()
+        orig = ds.fetch_receipts
+        ds.fetch_receipts = fake_fetch
+        try:
+            ds._scan_one_account(s, "u@gmail.com", "pw", imap_class=None,
+                                 today=date(2026, 10, 8))
+        finally:
+            ds.fetch_receipts = orig
+        assert captured["since"] == date(2026, 10, 8) - timedelta(days=100)
+    finally:
+        s.close()
