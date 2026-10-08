@@ -16,6 +16,9 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import pages, picker
+from app import crave as crave_mod
+from app import openrouter_models
+from app.crave import K_CRAVE_FREE_ONLY, K_CRAVE_KEY, K_CRAVE_MODEL
 from app.database import get_session, init_db
 from app.discover import (
     K_AVOID_REPEAT_CUISINE,
@@ -365,6 +368,36 @@ class PickIn(BaseModel):
     include_cuisine: bool = False  # override the avoid-repeat-cuisine exclusion
 
 
+def _deal_and_item_inputs(session: Session, today: date):
+    """Active deals and counted visit items, keyed by restaurant id.
+
+    Shared by the Friday picker and Crave suggestions so both rank with
+    the same boosts (active deal x1.5, item-keyword match x1.25).
+    """
+    deals_by_id: dict[int, list[dict]] = {}
+    for d in session.query(Deal).all():
+        dd = {
+            "title": d.title,
+            "valid_from": d.valid_from,
+            "valid_until": d.valid_until,
+            "created_at": d.created_at,
+            "item_keywords": d.item_keywords,
+        }
+        if d.restaurant_id is not None and picker.is_deal_active(dd, today):
+            deals_by_id.setdefault(d.restaurant_id, []).append(dd)
+
+    items_by_id: dict[int, list[str]] = {}
+    for v in (
+        session.query(Visit)
+        .filter(Visit.items.isnot(None), Visit.exclude_from_picks.isnot(True))
+        .all()
+    ):
+        items_by_id.setdefault(v.restaurant_id, []).extend(
+            [i.strip() for i in (v.items or "").splitlines() if i.strip()]
+        )
+    return deals_by_id, items_by_id
+
+
 def build_pick_response(session: Session, mode: str = "friday",
                         keep_ids: tuple[int, ...] = (),
                         veto_ids: tuple[int, ...] = (),
@@ -383,6 +416,7 @@ def build_pick_response(session: Session, mode: str = "friday",
     counts, lasts = visit_stats(session, counted_only=True)
     restaurants = session.query(Restaurant).all()
     today = date.today()
+    deals_by_id, items_by_id = _deal_and_item_inputs(session, today)
 
     if mode == "new":
         dicts = [
@@ -445,28 +479,6 @@ def build_pick_response(session: Session, mode: str = "friday",
 
     last_by_id = {rid: d for rid, d in lasts.items()}
 
-    deals_by_id: dict[int, list[dict]] = {}
-    for d in session.query(Deal).all():
-        dd = {
-            "title": d.title,
-            "valid_from": d.valid_from,
-            "valid_until": d.valid_until,
-            "created_at": d.created_at,
-            "item_keywords": d.item_keywords,
-        }
-        if d.restaurant_id is not None and picker.is_deal_active(dd, today):
-            deals_by_id.setdefault(d.restaurant_id, []).append(dd)
-
-    items_by_id: dict[int, list[str]] = {}
-    for v in (
-        session.query(Visit)
-        .filter(Visit.items.isnot(None), Visit.exclude_from_picks.isnot(True))
-        .all()
-    ):
-        items_by_id.setdefault(v.restaurant_id, []).extend(
-            [i.strip() for i in (v.items or "").splitlines() if i.strip()]
-        )
-
     stats = picker.candidate_stats(dicts, last_by_id, today=today,
                                    deals_by_id=deals_by_id, items_by_id=items_by_id)
     picks = picker.pick_three(stats, keep_ids, veto_ids)
@@ -502,6 +514,47 @@ def pick(payload: PickIn, session: Session = Depends(get_session)):
         veto_ids=tuple(payload.veto_ids),
         include_cuisine=payload.include_cuisine,
     )
+
+
+# ---------- crave (AI "what am I feeling?") ----------
+
+
+@app.get("/api/openrouter-models")
+def api_openrouter_models(free_only: bool = True):
+    """Text/chat models from OpenRouter's public catalog (no auth needed).
+
+    Mirrors Fauna's vision-model endpoint. Never fails hard — returns an
+    empty list when the catalog is unreachable and the Settings UI falls
+    back to a plain text field.
+    """
+    models = openrouter_models.get_chat_models()
+    if free_only:
+        models = [m for m in models if m["free"]]
+    return {"models": models}
+
+
+class CraveIn(BaseModel):
+    text: str
+
+
+@app.post("/api/crave")
+def api_crave(payload: CraveIn, session: Session = Depends(get_session)):
+    """3 grounded suggestions for a craving.
+
+    An LLM (or the keyword fallback without a key) turns the text into
+    structured filters; the app matches those against his restaurants +
+    nearby spots. Suggestions only ever come from real data.
+    """
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(400, "Tell me what you're feeling first.")
+    if len(text) > 300:
+        raise HTTPException(400, "Keep it under 300 characters.")
+    try:
+        return crave_mod.suggest(session, text)
+    except Exception as exc:
+        logger.warning("crave failed: %s", exc)
+        raise HTTPException(502, f"Couldn't come up with suggestions: {exc}")
 
 
 # ---------- deals ----------
@@ -653,6 +706,10 @@ def settings_view(session: Session) -> dict:
         "friday_nudge_last_result": get_setting(session, K_NUDGE_LAST_RESULT),
         # picker
         "avoid_repeat_cuisine": get_setting(session, K_AVOID_REPEAT_CUISINE, "1") == "1",
+        # crave (AI suggestions)
+        "openrouter_api_key_set": bool(get_setting(session, K_CRAVE_KEY)),
+        "crave_model": get_setting(session, K_CRAVE_MODEL) or "",
+        "crave_model_free_only": get_setting(session, K_CRAVE_FREE_ONLY, "1") == "1",
     }
 
 
@@ -667,6 +724,10 @@ class SettingsIn(BaseModel):
     friday_nudge_enabled: bool | None = None
     friday_nudge_time: str | None = None  # "HH:MM"
     avoid_repeat_cuisine: bool | None = None
+    # crave (AI suggestions)
+    openrouter_api_key: str | None = None  # write-only; empty/masked value keeps the saved key
+    crave_model: str | None = None
+    crave_model_free_only: bool | None = None
 
 
 def _validate_hhmm(value: str, label: str) -> str:
@@ -713,6 +774,13 @@ def update_settings(payload: SettingsIn, session: Session = Depends(get_session)
     # picker
     if payload.avoid_repeat_cuisine is not None:
         set_setting(session, K_AVOID_REPEAT_CUISINE, "1" if payload.avoid_repeat_cuisine else "0")
+    # crave (AI suggestions)
+    if payload.openrouter_api_key and payload.openrouter_api_key != MASKED:
+        set_setting(session, K_CRAVE_KEY, payload.openrouter_api_key.strip() or None)
+    if payload.crave_model is not None:
+        set_setting(session, K_CRAVE_MODEL, payload.crave_model.strip() or None)
+    if payload.crave_model_free_only is not None:
+        set_setting(session, K_CRAVE_FREE_ONLY, "1" if payload.crave_model_free_only else "0")
     session.commit()
     deal_scheduler.schedule_from_settings()
     deal_scheduler.schedule_nudge_from_settings()

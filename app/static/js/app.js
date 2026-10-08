@@ -460,3 +460,160 @@ async function savePickerSettings(e) {
 if (document.getElementById('discover-results') && typeof discoverInit === 'function') {
   discoverInit();
 }
+
+// ---- Crave ("what am I feeling?") ----
+function craveChip(t) {
+  document.getElementById('crave-input').value = t;
+  crave();
+}
+
+async function crave() {
+  const input = document.getElementById('crave-input');
+  const text = input.value.trim();
+  const area = document.getElementById('crave-area');
+  if (!text) return;
+  area.innerHTML = '<div class="spinner">🤔 Thinking…</div>';
+  try {
+    const data = await api('POST', '/api/crave', { text });
+    if (!data.suggestions.length) {
+      area.innerHTML = '<div class="empty">Nothing matched — try different words, or <a href="/discover">discover</a> new spots.</div>';
+      return;
+    }
+    let banner = '';
+    const via = (data.intent && data.intent.via) || 'keyword';
+    if (via === 'keyword') {
+      banner = '<div class="preview-box">No AI key set — matching on keywords. Add an OpenRouter key in Settings for smarter parsing.</div>';
+    }
+    if (data.note) banner += '<div class="preview-box">' + escapeHtml(data.note) + '</div>';
+    area.innerHTML = banner + '<div class="cards">' + data.suggestions.map(craveCardHtml).join('') + '</div>';
+  } catch (e) {
+    area.innerHTML = '<div class="empty">Couldn\'t suggest: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function craveCardHtml(s) {
+  const reasons = (s.reasons || []).map(r => '<div><span class="reason">' + escapeHtml(r) + '</span></div>').join('');
+  const deals = (s.deal_titles || []).map(t => '<div class="deal-badge">🏷️ ' + escapeHtml(t) + '</div>').join('');
+  if (s.kind === 'new') {
+    const dist = s.distance_mi != null ? ' · ' + s.distance_mi + ' mi' : '';
+    return `<div class="pick-card">
+      <div class="price">${priceStr(s.price_tier)}</div>
+      <h3>${escapeHtml(s.name)}</h3>
+      <div class="cuisine">${escapeHtml(s.cuisine || '')} · ✨ New to you${dist}</div>
+      ${s.address ? `<div class="last">${escapeHtml(s.address)}</div>` : ''}
+      ${reasons}${deals}
+      <button class="eat" onclick='craveAdd(this)' data-payload='${escapeHtml(JSON.stringify(s.add_payload))}'>➕ Add to my restaurants</button>
+    </div>`;
+  }
+  return `<div class="pick-card">
+    <div class="price">${priceStr(s.price_tier)}</div>
+    <h3>${escapeHtml(s.name)}</h3>
+    <div class="cuisine">${escapeHtml(s.cuisine || '')}${s.favorite ? ' ★' : ''}</div>
+    ${reasons}${deals}
+    <div class="last">${s.last_visit ? 'Last visit: ' + fmtDate(s.last_visit) : 'Never been'}</div>
+    <button class="eat" onclick="craveEatHere(${s.id}, ${JSON.stringify(s.name)})">We ate here ✓</button>
+  </div>`;
+}
+
+async function craveEatHere(id, name) {
+  try {
+    await api('POST', '/api/visits', { restaurant_id: id });
+    toast('Logged! Enjoy ' + name + ' 🎉');
+    crave();
+  } catch (e) { toast('Couldn\'t log: ' + e.message); }
+}
+
+async function craveAdd(btn) {
+  try {
+    const payload = JSON.parse(btn.getAttribute('data-payload'));
+    const r = await api('POST', '/api/discover/add', payload);
+    toast('Added ' + r.name + ' ✓ — tap "We ate here" after you go.');
+    crave();
+  } catch (e) { toast('Couldn\'t add: ' + e.message); }
+}
+
+// ---- Crave settings (OpenRouter model dropdown) ----
+let craveModelCache = [];
+
+async function saveCraveSettings(e) {
+  e.preventDefault();
+  const key = document.getElementById('c-key').value;
+  const model = document.getElementById('c-model').value;
+  const payload = {
+    crave_model: model || null,
+    crave_model_free_only: document.getElementById('c-model-free-only').checked,
+  };
+  if (key) payload.openrouter_api_key = key;
+  try {
+    await api('PUT', '/api/settings', payload);
+    document.getElementById('crave-settings-result').innerHTML =
+      '<div class="notice">✓ Saved.</div>';
+    document.getElementById('c-key').value = '';
+  } catch (err) {
+    document.getElementById('crave-settings-result').innerHTML =
+      '<div class="notice">Couldn\'t save: ' + escapeHtml(err.message) + '</div>';
+  }
+  return false;
+}
+
+function renderCraveModelOptions() {
+  const sel = document.getElementById('c-model-select');
+  const inp = document.getElementById('c-model');
+  const freeOnly = document.getElementById('c-model-free-only').checked;
+  const saved = sel.getAttribute('data-saved') || '';
+  const list = freeOnly ? craveModelCache.filter(m => m.free) : craveModelCache;
+  let html = '';
+  list.forEach(m => {
+    const label = m.name + (m.free ? ' (free)' : '');
+    const selAttr = (m.id === saved || (!saved && m.id === 'meta-llama/llama-3.3-70b-instruct:free')) ? ' selected' : '';
+    html += `<option value="${escapeHtml(m.id)}"${selAttr}>${escapeHtml(label)}</option>`;
+  });
+  html += `<option value="__custom">Custom…</option>`;
+  sel.innerHTML = html;
+  // if the saved model isn't in the list, show the custom field with it
+  const inList = list.some(m => m.id === saved);
+  if (saved && !inList) {
+    sel.value = '__custom';
+    inp.value = saved;
+    inp.style.display = '';
+  } else {
+    inp.value = sel.value === '__custom' ? inp.value : sel.value;
+    if (sel.value !== '__custom') inp.style.display = 'none';
+  }
+}
+
+function initCraveModels() {
+  const sel = document.getElementById('c-model-select');
+  if (!sel) return;
+  const inp = document.getElementById('c-model');
+  sel.addEventListener('change', function () {
+    if (sel.value === '__custom') {
+      inp.style.display = '';
+      inp.focus();
+    } else {
+      inp.value = sel.value;
+      inp.style.display = 'none';
+    }
+  });
+  document.getElementById('c-model-free-only').addEventListener('change', renderCraveModelOptions);
+  fetch('/api/openrouter-models')
+    .then(r => { if (!r.ok) throw new Error('no catalog'); return r.json(); })
+    .then(data => {
+      craveModelCache = (data && data.models) || [];
+      if (!craveModelCache.length) throw new Error('empty catalog');
+      renderCraveModelOptions();
+    })
+    .catch(() => {
+      // offline fallback: plain text field with the saved (or default) model
+      sel.style.display = 'none';
+      document.getElementById('c-model-free-only').parentElement.style.display = 'none';
+      inp.style.display = '';
+      inp.value = sel.getAttribute('data-saved') || '';
+      inp.placeholder = 'Model id, e.g. meta-llama/llama-3.3-70b-instruct:free';
+    });
+}
+
+// page init: crave model dropdown on the settings page
+if (document.getElementById('c-model-select') && typeof initCraveModels === 'function') {
+  initCraveModels();
+}

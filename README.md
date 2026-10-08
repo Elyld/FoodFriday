@@ -103,6 +103,16 @@ The Discover tab finds restaurants around you that aren't in your list yet — w
 
 Why not Yelp? Yelp retired free self-serve app creation (the create button is greyed out and their docs now push paid plans), so OpenStreetMap is the default provider. If you ever get a Yelp Fusion API key, pasting it in Settings switches Discover to Yelp (adds star ratings); the key is stored only in this app's own database and never shown back to you. Results are **cached for 24 hours** per provider + location + radius — the page shows which provider served the results and a Refresh link for a live search.
 
+## ✨ Crave (AI-powered "what am I feeling?")
+
+The home page has a **"What are you feeling? ✨"** box. Type something like *"soul food"* or *"bar food, not too expensive"* and hit Suggest — you get 3 grounded suggestions with reason lines (*"Matches 'soul food'"*, *"🏷️ Active deal"*, *"✨ New spot near you"*, *"You haven't been in 200+ days"*). Your-place cards have a **Log visit** button; new-spot cards have **➕ Add** (adds it to your list, then it's loggable).
+
+**Grounding guarantee:** the AI never picks restaurants. A chat model through OpenRouter only *interprets* your words into structured filters (`cuisines`, `keywords`, `max_price_tier`, `include_new`, `avoid_cuisines`) — the app does all matching and ranking against your restaurant database and nearby search results, so a suggestion can only ever be a real place. The model only ever sees your cuisine vocabulary, never your history.
+
+**Setup** (Settings → Crave): paste an OpenRouter API key (get one at [openrouter.ai/keys](https://openrouter.ai/keys) — free models work fine, a craving costs a few hundred tokens), pick a model from the dropdown (**Free models only** is on by default; **Custom…** takes any model id), Save. The key is write-only — the app only ever reports whether one is set, and it lives in the app's own database.
+
+**No key?** Crave still works on plain keyword matching: cuisine names, "cheap" → $ only, "expensive" → $$$, "new"/"haven't tried" → new spots only, "no X"/"avoid X" → cuisine exclusion. Dumber, but functional. If OpenRouter can't be reached, the model dropdown degrades to a text field.
+
 ## 🔔 Friday nudge (Discord)
 
 Every Friday morning FoodFriday can post the 3 picks to your Discord — names, cuisine, the reason line, and any 🏷️ deal. Setup:
@@ -152,7 +162,8 @@ PYTHONPATH=. .venv/bin/python -m pytest -q   # 105 tests
 | ![Restaurants](docs/screenshots/restaurants.png) | ![Deals](docs/screenshots/restaurants-deals.png) |
 | ![Discover](docs/screenshots/discover.png) | ![Spending](docs/screenshots/spending.png) |
 | ![Mobile](docs/screenshots/mobile-home.png) | ![Email accounts](docs/screenshots/settings-accounts.png) |
-| ![History checkmarks](docs/screenshots/history-checkmarks.png) | |
+| ![History checkmarks](docs/screenshots/history-checkmarks.png) | ![Crave results](docs/screenshots/crave-results.png) |
+| ![Crave settings](docs/screenshots/settings-crave.png) | ![Crave mobile](docs/screenshots/mobile-crave.png) |
 
 ## Stack
 

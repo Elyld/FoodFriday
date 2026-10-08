@@ -71,6 +71,21 @@ def home_page() -> str:
 <div class="pick-actions" id="pick-actions" style="display:none">
   <button class="btn-secondary" onclick="reroll()">↻ Reroll all three</button>
 </div>
+<div class="crave-box">
+  <h2>What are you feeling? ✨</h2>
+  <p class="crave-sub">Describe a craving — I'll match it against your spots and nearby places.</p>
+  <div class="crave-row">
+    <input id="crave-input" maxlength="200" placeholder="I'm feeling soul food…"
+           onkeydown="if(event.key==='Enter')crave()">
+    <button class="btn-primary" onclick="crave()">Suggest</button>
+  </div>
+  <div class="chips">
+    <button class="chip" onclick="craveChip('soul food')">soul food</button>
+    <button class="chip" onclick="craveChip('bar food, not too expensive')">bar food, not too expensive</button>
+    <button class="chip" onclick="craveChip('somewhere new and cheap')">somewhere new and cheap</button>
+  </div>
+  <div id="crave-area"></div>
+</div>
 """
     return layout("Pick dinner", body, "home")
 
@@ -401,6 +416,31 @@ Create a webhook in your server: channel settings → Integrations → Webhooks 
   <label class="check"><input id="p-avoid-cuisine" type="checkbox" {'checked' if s["avoid_repeat_cuisine"] else ""}>
     Don't pick the same cuisine as the most recent visit</label>
   <div style="margin-top:.6rem"><button class="btn-primary btn-small" type="submit">Save</button></div>
+</form>
+<h3>✨ Crave (AI suggestions)</h3>
+<p style="color:#7a6552">The "What are you feeling?" box on the home page turns a craving
+into filters ("soul food", "bar food but not too expensive") using a chat model through
+OpenRouter. Paste a key once — without one, Crave still works on plain keyword matching,
+just less cleverly. Suggestions always come from your restaurants + nearby spots;
+the AI never invents a place.</p>
+<form class="card-form" onsubmit="return saveCraveSettings(event)">
+  <div class="field"><label>OpenRouter API key</label>
+    <input id="c-key" type="password" maxlength="255" autocomplete="new-password"
+           placeholder="{'saved — leave blank to keep' if s["openrouter_api_key_set"] else 'sk-or-…'}">
+    <div class="hint">Get one at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a>.
+    Free models work fine — this uses a few hundred tokens per craving.</div></div>
+  <div class="field"><label>Model</label>
+    <select id="c-model-select" data-saved="{esc(s["crave_model"])}"><option value="">Loading models…</option></select>
+    <label class="check" style="margin-top:.4rem"><input id="c-model-free-only" type="checkbox" {'checked' if s["crave_model_free_only"] else ""}>
+      Free models only</label>
+    <input id="c-model" type="text" maxlength="255" style="display:none;margin-top:.4rem"
+           placeholder="Custom model id, e.g. anthropic/claude-haiku-4-5">
+    <div class="hint">Pick from the list (free ones are marked), or choose "Custom…" to type any model id from
+    <a href="https://openrouter.ai/models" target="_blank" rel="noopener">openrouter.ai/models</a>.</div></div>
+  <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+    <button class="btn-primary btn-small" type="submit">Save</button>
+  </div>
+  <div id="crave-settings-result"></div>
 </form>
 """
     return layout("Settings", body, "settings")
