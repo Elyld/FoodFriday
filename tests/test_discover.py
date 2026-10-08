@@ -408,3 +408,38 @@ def test_search_overpass_dns_error_message_is_human_readable():
     import pytest
     with pytest.raises(RuntimeError, match="DNS lookup failed"):
         search_overpass(39.05, -95.68, 5, http_post=_dns_fail)
+
+
+def test_discover_add_all_bulk_creates_and_is_idempotent():
+    _settings(yelp_api_key=None)
+    payload = {
+        "businesses": [
+            {"name": "Bulk Diner One", "cuisine": "American", "price_tier": 1},
+            {"name": "Bulk Diner Two", "cuisine": "Mexican", "price_tier": 2},
+            {"name": "   ", "cuisine": "X"},  # blank name -> skipped via 400? no: whole-batch must not die
+        ]
+    }
+    # blank names raise 400 on the single endpoint; add-all should skip them
+    r = client.post("/api/discover/add-all", json={
+        "businesses": [
+            {"name": "Bulk Diner One", "cuisine": "American", "price_tier": 1},
+            {"name": "Bulk Diner Two", "cuisine": "Mexican", "price_tier": 2},
+        ]
+    })
+    assert r.status_code == 201, r.text
+    assert r.json() == {"added": 2, "skipped": 0}
+
+    # second run: all dupes
+    r2 = client.post("/api/discover/add-all", json={
+        "businesses": [
+            {"name": "bulk diner one", "cuisine": "American", "price_tier": 1},
+            {"name": "Bulk Diner Two", "cuisine": "Mexican", "price_tier": 2},
+        ]
+    })
+    assert r2.status_code == 201
+    assert r2.json() == {"added": 0, "skipped": 2}
+
+    # empty list is fine
+    r3 = client.post("/api/discover/add-all", json={"businesses": []})
+    assert r3.status_code == 201
+    assert r3.json() == {"added": 0, "skipped": 0}

@@ -350,8 +350,10 @@ async function searchDiscover(refresh) {
     }
     if (!discoverBusinesses.length) {
       box.innerHTML = '<div class="empty">Nothing new nearby — everything found is already in your list. 🎉</div>';
+      document.getElementById('disc-add-all').style.display = 'none';
       return;
     }
+    document.getElementById('disc-add-all').style.display = '';
     box.innerHTML = '<div class="cards">' + discoverBusinesses.map((b, i) => `
       <div class="pick-card">
         <div class="price">${escapeHtml(b.price_label || '')}</div>
@@ -380,6 +382,34 @@ async function addDiscovered(i) {
   } catch (e) {
     btn.disabled = false;
     toast('Couldn\'t add: ' + e.message);
+  }
+}
+
+async function addAllDiscovered() {
+  const btn = document.getElementById('disc-add-all');
+  const n = discoverBusinesses.length;
+  if (!n) return;
+  if (!confirm(`Add all ${n} places to your restaurants?`)) return;
+  btn.disabled = true;
+  btn.textContent = 'Adding…';
+  try {
+    const r = await api('POST', '/api/discover/add-all', {
+      businesses: discoverBusinesses.map(b => ({
+        yelp_id: b.yelp_id, name: b.name, cuisine: b.cuisine || null,
+        price_tier: b.price_tier, address: b.address || null, rating: b.rating,
+      })),
+    });
+    toast(`Added ${r.added} to your restaurants 🎉` + (r.skipped ? ` (${r.skipped} already there)` : ''));
+    btn.style.display = 'none';
+    // flip individual buttons so the list reflects the new state
+    discoverBusinesses.forEach((b, i) => {
+      const bb = document.getElementById('disc-add-' + i);
+      if (bb) { bb.textContent = 'Added ✓'; bb.disabled = true; }
+    });
+  } catch (e) {
+    toast('Couldn\'t add: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = '➕ Add all';
   }
 }
 

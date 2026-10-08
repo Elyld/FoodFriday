@@ -231,6 +231,7 @@ Add one and it's in the rotation (and eligible for "✨ Somewhere new").</p>
       <div style="display:flex;gap:.6rem;flex-wrap:wrap">
         <button class="btn-primary btn-small" onclick="searchDiscover(false)">🔍 Search nearby</button>
         <button class="btn-secondary btn-small" onclick="searchDiscover(true)">↻ Refresh (live)</button>
+        <button class="btn-secondary btn-small" id="disc-add-all" style="display:none" onclick="addAllDiscovered()">➕ Add all</button>
       </div></div>
   </div>
   <div id="discover-cache-note" style="color:#7a6552;font-size:.85rem"></div>

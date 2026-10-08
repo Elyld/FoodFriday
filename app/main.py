@@ -917,6 +917,29 @@ class DiscoverAddIn(BaseModel):
 @app.post("/api/discover/add", status_code=201)
 def api_discover_add(payload: DiscoverAddIn, session: Session = Depends(get_session)):
     """Add a Yelp business to the restaurant list. Idempotent by name."""
+    result = _add_discovered(session, payload)
+    return result
+
+
+class DiscoverAddAllIn(BaseModel):
+    businesses: list[DiscoverAddIn] = []
+
+
+@app.post("/api/discover/add-all", status_code=201)
+def api_discover_add_all(payload: DiscoverAddAllIn, session: Session = Depends(get_session)):
+    """Add every discovered business to the restaurant list. Idempotent by name."""
+    added = 0
+    skipped = 0
+    for b in payload.businesses:
+        result = _add_discovered(session, b)
+        if result.get("already"):
+            skipped += 1
+        else:
+            added += 1
+    return {"added": added, "skipped": skipped}
+
+
+def _add_discovered(session: Session, payload: DiscoverAddIn) -> dict:
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(400, "Name is required")
