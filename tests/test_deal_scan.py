@@ -222,7 +222,9 @@ def _enable():
         "label": "mine", "address": "u@gmail.com", "app_password": "pw",
     })
     assert r.status_code == 201
-    client.put("/api/settings", json={"deal_scan_enabled": True})
+    # National promos hit the live web — keep this file's scans hermetic.
+    client.put("/api/settings", json={"deal_scan_enabled": True,
+                                      "national_deals_enabled": False})
 
 
 def _reset_deals():

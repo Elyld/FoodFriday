@@ -301,6 +301,7 @@ def spending_page(a: dict) -> str:
 def settings_page(s: dict) -> str:
     enabled = "checked" if s["deal_scan_enabled"] else ""
     r_enabled = "checked" if s.get("receipt_scan_enabled", True) else ""
+    n_enabled = "checked" if s.get("national_deals_enabled", True) else ""
     last_run = fmt_date(s["deal_scan_last_run"][:10]) if s.get("deal_scan_last_run") else "never"
     last_result = s.get("deal_scan_last_result") or "—"
     r_last_run = fmt_date(s["receipt_scan_last_run"][:10]) if s.get("receipt_scan_last_run") else "never"
@@ -363,7 +364,8 @@ so the Friday boost works.</p>
         title="How far back the receipt scan looks for orders"></div>
     <div class="field"><label>&nbsp;</label>
       <label class="check"><input id="s-enabled" type="checkbox" {enabled}> deal scanning enabled</label>
-      <label class="check"><input id="s-receipt-enabled" type="checkbox" {r_enabled}> receipt scanning enabled</label></div>
+      <label class="check"><input id="s-receipt-enabled" type="checkbox" {r_enabled}> receipt scanning enabled</label>
+      <label class="check" title="Watch r/fastfood for national chain promos (no email needed)"><input id="s-national-enabled" type="checkbox" {n_enabled}> national promos enabled</label></div>
   </div>
   <div style="display:flex;gap:.6rem;flex-wrap:wrap">
     <button class="btn-primary btn-small" type="submit">Save</button>

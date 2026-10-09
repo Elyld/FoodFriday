@@ -35,6 +35,7 @@ from app.receipt_parse import (
 )
 
 from app.models import Deal, EmailAccount, Restaurant, Setting, Visit
+from app.national_deals import fetch_national_deals
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,8 @@ K_R_ENABLED = "receipt_scan_enabled"         # "1"/"0", default on
 K_R_DAYS = "receipt_scan_days"              # how far back to look, default 365
 K_R_LAST_RUN = "receipt_scan_last_run"      # ISO datetime
 K_R_LAST_RESULT = "receipt_scan_last_result"  # human-readable summary (receipts)
+
+K_N_DEALS = "national_deals_enabled"        # "1"/"0", default on
 
 DEFAULT_RECEIPT_SCAN_DAYS = 365
 MAX_RECEIPT_SCAN_DAYS = 3650  # 10 years — sanity cap for the number field
@@ -134,6 +137,11 @@ def receipt_scan_enabled(session: Session) -> bool:
     if get_setting(session, K_R_ENABLED, "1") != "1":
         return False
     return scan_configured(session)
+
+
+def national_deals_enabled(session: Session) -> bool:
+    """National promo watcher (Reddit RSS). Default on; needs no email."""
+    return get_setting(session, K_N_DEALS, "1") == "1"
 
 
 def receipt_scan_days(session: Session) -> int:
@@ -347,7 +355,7 @@ def store_deals(session: Session, deals: list[dict]) -> tuple[int, int]:
                 valid_from=valid_from,
                 valid_until=valid_until,
                 item_keywords=d.get("item_keywords"),
-                source="email",
+                source=d.get("source", "email"),
             )
         )
         existing_keys.add(key)
@@ -598,6 +606,26 @@ def run_scan(session: Session, imap_class=imaplib.IMAP4_SSL,
             totals[key] += res[key]
         if res["error"]:
             errors.append(f"{label}: {res['error']}")
+
+    # National promos (Reddit RSS) — once per scan, not per account. A dead
+    # feed logs a warning and yields nothing; it never fails the scan.
+    if national_deals_enabled(session):
+        try:
+            own_names = [r.name for r in session.query(Restaurant).all()]
+            national = fetch_national_deals(own_names)
+            n_added, n_restaurants = store_deals(session, national)
+            session.flush()
+            if n_added:
+                deal_parts.append(
+                    f"{n_added} new national promo{'s' if n_added != 1 else ''} (web)"
+                )
+                totals["deals_added"] += n_added
+                totals["restaurants_added"] += n_restaurants
+            else:
+                deal_parts.append("no new national promos (web)")
+        except Exception as exc:  # noqa: BLE001 — never fail the scan on web deals
+            logger.warning("national deals phase failed: %s", exc)
+            errors.append(f"national deals: {exc}")
 
     deal_summary = "; ".join(deal_parts)
     receipt_summary = "; ".join(receipt_parts)

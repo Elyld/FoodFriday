@@ -204,6 +204,7 @@ async function saveSettings(e) {
     deal_scan_time: document.getElementById('s-time').value || null,
     receipt_scan_enabled: document.getElementById('s-receipt-enabled').checked,
     receipt_scan_days: parseInt(document.getElementById('s-receipt-days').value, 10) || null,
+    national_deals_enabled: document.getElementById('s-national-enabled').checked,
   };
   try {
     await api('PUT', '/api/settings', body);

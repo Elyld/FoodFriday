@@ -42,6 +42,7 @@ from app.deal_scan import (
     K_ENABLED,
     K_LAST_RESULT,
     K_LAST_RUN,
+    K_N_DEALS,
     K_R_DAYS,
     K_R_ENABLED,
     K_R_LAST_RESULT,
@@ -699,6 +700,7 @@ def settings_view(session: Session) -> dict:
         "deal_scan_status": get_setting(session, K_STATUS, "idle") or "idle",
         "receipt_scan_enabled": get_setting(session, K_R_ENABLED, "1") == "1",
         "receipt_scan_days": receipt_scan_days(session),
+        "national_deals_enabled": get_setting(session, K_N_DEALS, "1") == "1",
         "receipt_scan_last_run": get_setting(session, K_R_LAST_RUN),
         "receipt_scan_last_result": get_setting(session, K_R_LAST_RESULT),
         "configured": scan_enabled(session),
@@ -727,6 +729,7 @@ class SettingsIn(BaseModel):
     deal_scan_time: str | None = None  # "HH:MM"
     receipt_scan_enabled: bool | None = None
     receipt_scan_days: int | None = None
+    national_deals_enabled: bool | None = None
     yelp_api_key: str | None = None  # write-only; ignored when empty/masked
     home_lat: str | None = None
     home_lon: str | None = None
@@ -765,6 +768,8 @@ def update_settings(payload: SettingsIn, session: Session = Depends(get_session)
         set_setting(session, K_TIME, _validate_hhmm(payload.deal_scan_time, "Scan time"))
     if payload.receipt_scan_enabled is not None:
         set_setting(session, K_R_ENABLED, "1" if payload.receipt_scan_enabled else "0")
+    if payload.national_deals_enabled is not None:
+        set_setting(session, K_N_DEALS, "1" if payload.national_deals_enabled else "0")
     if payload.receipt_scan_days is not None:
         try:
             days = int(payload.receipt_scan_days)
