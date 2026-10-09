@@ -114,6 +114,22 @@ def test_extract_deal_cleans_brackets():
     assert deal["title"] == "Wendy's: BOGO Dave's Single"
 
 
+def test_extract_deal_threads_post_link():
+    deal = extract_deal(
+        "Domino's 50% off all menu-priced pizzas (Oct 5-11)", TODAY,
+        link="https://www.reddit.com/r/fastfood/comments/abc/deal/",
+    )
+    assert deal is not None
+    assert deal["source_url"] == "https://www.reddit.com/r/fastfood/comments/abc/deal/"
+
+
+def test_fetch_national_deals_threads_links():
+    deals = fetch_national_deals(urlopen=_fake_urlopen)
+    by_title = {d["title"]: d for d in deals}
+    d = by_title["Domino's 50% off all menu-priced pizzas (Oct 5-11)"]
+    assert d["source_url"] == "https://www.reddit.com/r/fastfood/comments/abc/deal/"
+
+
 # ---------- fetch_national_deals with fake RSS ----------
 
 _FAKE_ATOM = """<?xml version="1.0" encoding="UTF-8"?>

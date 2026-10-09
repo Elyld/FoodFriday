@@ -106,6 +106,9 @@ class Deal(Base):
         Text, nullable=True
     )  # comma-separated keywords for the item-level pick bonus
     source: Mapped[str | None] = mapped_column(String(32), nullable=True, default="manual")
+    source_url: Mapped[str | None] = mapped_column(
+        String(512), nullable=True
+    )  # link to the origin: Reddit post, Gmail search, …
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     restaurant: Mapped["Restaurant | None"] = relationship("Restaurant", back_populates="deals")

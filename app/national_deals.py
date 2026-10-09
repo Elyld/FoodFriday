@@ -192,7 +192,8 @@ def parse_valid_until(title: str, published: date) -> date:
 
 
 def extract_deal(title: str, published: date,
-                 own_names: list[str] | None = None) -> dict | None:
+                 own_names: list[str] | None = None,
+                 link: str | None = None) -> dict | None:
     """A Reddit post title -> deal dict for store_deals, or None."""
     if not looks_like_deal(title):
         return None
@@ -210,6 +211,7 @@ def extract_deal(title: str, published: date,
         "valid_until": valid_until.isoformat(),
         "item_keywords": "",
         "source": "national",
+        "source_url": link,
     }
 
 
@@ -261,7 +263,8 @@ def fetch_national_deals(own_names: list[str] | None = None,
         if key in seen_titles:
             continue
         seen_titles.add(key)
-        deal = extract_deal(post["title"], post["published"], own_names)
+        deal = extract_deal(post["title"], post["published"], own_names,
+                            link=post["link"])
         if deal:
             deals.append(deal)
     return deals

@@ -42,6 +42,7 @@ def layout(title: str, body: str, active: str = "") -> str:
   <nav>
     {nav("/", "Pick", "home")}
     {nav("/restaurants", "Restaurants", "restaurants")}
+    {nav("/promos", "🏷️ Promos", "promos")}
     {nav("/discover", "🧭 Discover", "discover")}
     {nav("/spending", "💰 Spending", "spending")}
     {nav("/history", "History", "history")}
@@ -190,6 +191,73 @@ def restaurants_page(restaurants: list[dict], deals: list[dict]) -> str:
 {deal_list}
 """
     return layout("Restaurants", body, "restaurants")
+
+
+_SOURCE_BADGES = {
+    "email": "📧 email",
+    "national": "🌐 web",
+    "manual": "✏️ manual",
+    "import": "📥 import",
+}
+_SOURCE_LINK_LABELS = {
+    "email": "open in Gmail ↗",
+    "national": "view post ↗",
+}
+
+
+def _promo_card(d: dict) -> str:
+    cls = "deal" if d["active"] else "deal expired"
+    state = "active" if d["active"] else "expired"
+    when = []
+    if d["valid_from"]:
+        when.append("from " + fmt_date(d["valid_from"]))
+    if d["valid_until"]:
+        when.append("until " + fmt_date(d["valid_until"]))
+    when_s = f'<div class="deal-when">{" · ".join(when)}</div>' if when else ""
+    badge = _SOURCE_BADGES.get(d["source"] or "", esc(d["source"] or "?"))
+    link = ""
+    if d.get("source_url"):
+        label = _SOURCE_LINK_LABELS.get(d["source"] or "", "view source ↗")
+        link = f' <a href="{esc(d["source_url"])}" target="_blank" rel="noopener">{label}</a>'
+    return f"""<div class="{cls}">
+  <div class="deal-head"><strong>🏷️ {esc(d["title"])}</strong>
+    <span class="deal-state">{state}</span>
+    <span class="deal-rest">{esc(d["restaurant_name"] or "anywhere")}</span>
+    <span class="source-badge">{badge}</span>{link}
+    <button class="btn-danger btn-small" onclick="delDeal({d["id"]})">Delete</button></div>
+  {f'<div class="deal-desc">{esc(d["description"])}</div>' if d["description"] else ""}
+  {when_s}
+</div>"""
+
+
+def promos_page(deals: list[dict], show_all: bool) -> str:
+    active = [d for d in deals if d["active"]]
+    expired = [d for d in deals if not d["active"]]
+    if active:
+        active_list = '<div class="deal-list">' + "".join(_promo_card(d) for d in active) + "</div>"
+    else:
+        active_list = '<div class="empty">No promos running right now. The daily scan picks up email + web deals automatically — or add one on the <a href="/restaurants">Restaurants</a> tab.</div>'
+    toggle = (
+        '<p><a href="/promos?all=1">show expired too</a></p>'
+        if not show_all and expired
+        else ('<p><a href="/promos">hide expired</a></p>' if show_all else "")
+    )
+    expired_section = ""
+    if show_all and expired:
+        expired_section = (
+            '<h3 style="margin-top:2rem">Expired</h3><div class="deal-list">'
+            + "".join(_promo_card(d) for d in expired)
+            + "</div>"
+        )
+    counts = f"{len(active)} running" + (f" · {len(expired)} expired" if expired else "")
+    body = f"""
+<h2>🏷️ Promos</h2>
+<p style="color:#7a6552">{counts}. Active promos boost their restaurant in Friday picks.</p>
+{toggle}
+{active_list}
+{expired_section}
+"""
+    return layout("Promos", body, "promos")
 
 
 def history_page(visits: list[dict]) -> str:

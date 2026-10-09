@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -141,6 +141,14 @@ def restaurants_page(session: Session = Depends(get_session)):
     deals = [deal_dict(d) for d in session.query(Deal).all()]
     deals.sort(key=lambda d: (not d["active"], d["valid_until"] or "9999", d["title"]))
     return pages.restaurants_page(rows, deals)
+
+
+@app.get("/promos", response_class=HTMLResponse)
+def promos(request: Request, session: Session = Depends(get_session)):
+    show_all = request.query_params.get("all") == "1"
+    deals = [deal_dict(d) for d in session.query(Deal).all()]
+    deals.sort(key=lambda d: (not d["active"], d["valid_until"] or "9999", d["title"]))
+    return pages.promos_page(deals, show_all)
 
 
 @app.get("/history", response_class=HTMLResponse)
@@ -587,6 +595,7 @@ def deal_dict(d: Deal) -> dict:
         "valid_until": d.valid_until.isoformat() if d.valid_until else None,
         "item_keywords": d.item_keywords,
         "source": d.source,
+        "source_url": d.source_url,
         "active": active,
     }
 

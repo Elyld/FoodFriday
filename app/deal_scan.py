@@ -287,7 +287,10 @@ def fetch_promos(
                 sent = _message_date(msg)
                 if sent < since:  # belt & suspenders vs the SINCE search
                     continue
-                deal = parse_promo(sender, subject, body, sent, today=today)
+                deal = parse_promo(
+                    sender, subject, body, sent, today=today,
+                    message_id=_message_id(msg),
+                )
                 if deal:
                     deals.append(deal)
         # dedupe within this scan on (restaurant, title)
@@ -356,6 +359,7 @@ def store_deals(session: Session, deals: list[dict]) -> tuple[int, int]:
                 valid_until=valid_until,
                 item_keywords=d.get("item_keywords"),
                 source=d.get("source", "email"),
+                source_url=d.get("source_url"),
             )
         )
         existing_keys.add(key)

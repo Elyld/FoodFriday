@@ -8,7 +8,23 @@ None when the email is brand fluff, merch, expired, or from an unknown chain.
 from __future__ import annotations
 
 import re
+import urllib.parse
 from datetime import date, datetime, timedelta
+
+
+def gmail_search_url(message_id: str | None) -> str | None:
+    """A best-effort link back to the email in Gmail's web UI.
+
+    rfc822msgid search works across the mailbox without knowing Gmail's
+    internal thread IDs. /u/0/ is the primary login — right for most,
+    approximate for multi-account setups.
+    """
+    mid = (message_id or "").strip().strip("<>")
+    if not mid:
+        return None
+    return "https://mail.google.com/mail/u/0/#search/rfc822msgid%3A" + urllib.parse.quote(
+        mid, safe=""
+    )
 
 # domain fragment -> display name
 CHAINS = {
@@ -136,6 +152,7 @@ def parse_promo(
     body: str,
     sent: date,
     today: date | None = None,
+    message_id: str | None = None,
 ) -> dict | None:
     """Turn one promo email into a deal dict, or None if it's just fluff."""
     today = today or date.today()
@@ -170,4 +187,5 @@ def parse_promo(
         "valid_until": valid_until.isoformat() if valid_until else None,
         "item_keywords": extract_keywords(title) or None,
         "source": "email",
+        "source_url": gmail_search_url(message_id),
     }

@@ -177,6 +177,11 @@ form.card-form h3 { margin-top: 0; }
 }
 .deal.expired .deal-state { background: #e8e0d0; color: #7a6552; }
 .deal-rest { font-size: 0.85rem; color: var(--brown-soft); }
+.source-badge {
+  font-size: 0.78rem; color: var(--brown-soft);
+  border: 1px solid #e0d5c0; border-radius: 999px; padding: 0.05rem 0.5rem;
+  white-space: nowrap;
+}
 .deal-head .btn-danger { margin-left: auto; }
 .deal-desc { margin-top: 0.3rem; font-size: 0.92rem; }
 .deal-when, .deal-kw { font-size: 0.82rem; color: var(--brown-soft); margin-top: 0.15rem; }
